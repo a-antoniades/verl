@@ -6,6 +6,9 @@ DEBUG with agent data:
 bash examples/grpo_trainer/run_qwen2-7b_seq_balance_debug.sh
 ```
 
+To view data use `notebooks/view_data.ipynb`
+
+
 <h1 style="text-align: center;">veRL: Volcano Engine Reinforcement Learning for LLM</h1>
 
 veRL is a flexible, efficient and production-ready RL training library for large language models (LLMs).

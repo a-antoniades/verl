@@ -1,12 +1,10 @@
-FORK:
+### FORK and DEBUG with Agent Data
 
-DEBUG with agent data: 
-
+To run the project with debugging enabled and agent data, execute the following command in your terminal:
 ```bash
 bash examples/grpo_trainer/run_qwen2-7b_seq_balance_debug.sh
 ```
-
-To view data use `notebooks/view_data.ipynb`
+After running the project, you can view the data using the Jupyter notebook located at `notebooks/view_data.ipynb`.
 
 
 <h1 style="text-align: center;">veRL: Volcano Engine Reinforcement Learning for LLM</h1>

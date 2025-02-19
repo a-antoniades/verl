@@ -18,6 +18,7 @@ The main entry point to run the PPO algorithm
 import logging
 import os
 import warnings
+from omegaconf import OmegaConf
 
 import torch
 import torch.distributed
@@ -38,6 +39,7 @@ from verl.utils.import_utils import import_external_libs
 from verl.utils.model import compute_position_id_with_mask
 from verl.utils.flops_counter import FlopsCounter
 from verl.workers.sharding_manager.fsdp_ulysses import FSDPUlyssesShardingManager
+from transformers.models.qwen2.modeling_qwen2 import Qwen2DecoderLayer
 
 from codetiming import Timer
 
@@ -192,23 +194,73 @@ class ActorRolloutRefWorker(Worker):
         # NOTE(fix me): tie_word_embedding causes meta_tensor init to hang
         init_context = get_init_weight_context_manager(use_meta_tensor=not actor_model_config.tie_word_embeddings)
 
+        # First create the model regardless of LoRA
         with init_context(), warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            actor_module = AutoModelForCausalLM.from_pretrained(pretrained_model_name_or_path=local_path,
-                                                                torch_dtype=torch_dtype,
-                                                                config=actor_model_config,
-                                                                attn_implementation='flash_attention_2',
-                                                                trust_remote_code=trust_remote_code)
-            # Apply Liger kernel to the model if use_liger is set to True
-            if use_liger:
-                from liger_kernel.transformers.monkey_patch import _apply_liger_kernel_to_instance
-                _apply_liger_kernel_to_instance(model=actor_module)
+            actor_module = AutoModelForCausalLM.from_pretrained(
+                pretrained_model_name_or_path=local_path,
+                torch_dtype=torch_dtype,
+                config=actor_model_config,
+                trust_remote_code=trust_remote_code
+            )
 
-            # some parameters may not in torch_dtype. TODO(zhangchi.usc1992) remove this after we switch to fsdp2
-            actor_module.to(torch_dtype)
+        # Then apply LoRA if enabled
+        if self.config.model.get('enable_lora', False):
+            try:
+                from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+                from model.qwen.s2_attention import replace_attention_with_s2
 
-            if enable_gradient_checkpointing:
-                actor_module.gradient_checkpointing_enable(gradient_checkpointing_kwargs={'use_reentrant': False})
+                # Replace attention with S2-Attention
+                actor_module = replace_attention_with_s2(actor_module)
+                
+                # Prepare for LoRA and freeze base model
+                for param in actor_module.parameters():
+                    param.requires_grad = False
+                    
+                actor_module = prepare_model_for_kbit_training(actor_module)
+
+                # Configure LoRA with valid parameters
+                target_modules = [
+                    "q_proj", "k_proj", "v_proj", "o_proj",
+                    "gate_proj", "up_proj", "down_proj",
+                ]
+
+                lora_config = LoraConfig(
+                    r=self.config.model.get('max_lora_rank', 8),
+                    lora_alpha=32,
+                    target_modules=target_modules,
+                    lora_dropout=0.05,
+                    bias="none",
+                    task_type="CAUSAL_LM",
+                    inference_mode=False,
+                )
+                
+                # Apply LoRA
+                actor_module = get_peft_model(actor_module, lora_config)
+
+                # Print parameter analysis
+                total_params = sum(p.numel() for p in actor_module.parameters())
+                trainable_params = sum(p.numel() for p in actor_module.parameters() if p.requires_grad)
+                lora_params = sum(p.numel() for n, p in actor_module.named_parameters() if 'lora_' in n)
+                
+                print(f"\n=== Parameter Analysis ===")
+                print(f"Total parameters: {total_params}")
+                print(f"Trainable parameters: {trainable_params}")
+                print(f"LoRA parameters: {lora_params}")
+                print(f"Percentage trainable: {(trainable_params/total_params)*100:.4f}%")
+
+            except Exception as e:
+                print(f"Error during LongLoRA + S2-Attention application: {str(e)}")
+                import traceback
+                print(f"Traceback: {traceback.format_exc()}")
+                raise
+
+        # Move model to correct dtype
+        actor_module = actor_module.to(torch_dtype)
+
+        if enable_gradient_checkpointing:
+            actor_module.gradient_checkpointing_enable(gradient_checkpointing_kwargs={'use_reentrant': False})
+    
         torch.distributed.barrier()
 
         if self.rank == 0:
@@ -248,7 +300,7 @@ class ActorRolloutRefWorker(Worker):
             actor_module,
             cpu_offload=cpu_offload,
             param_init_fn=init_fn,
-            use_orig_params=False,
+            use_orig_params=True,
             auto_wrap_policy=auto_wrap_policy,
             device_id=torch.cuda.current_device(),
             sharding_strategy=sharding_strategy,  # zero3
@@ -281,16 +333,32 @@ class ActorRolloutRefWorker(Worker):
 
         log_gpu_memory_usage('After actor optimizer init', logger=logger)
 
+        # Update FSDP config parameters one at a time
+        if hasattr(fsdp_config, 'param_offload'):
+            fsdp_config.param_offload = False if self.config.model.get('enable_lora', False) else fsdp_config.param_offload
+        
+        if hasattr(fsdp_config, 'sharding_strategy'):
+            fsdp_config.sharding_strategy = 'NO_SHARD' if self.world_size == 1 else 'FULL_SHARD'
+
         return actor_module_fsdp, actor_optimizer, actor_lr_scheduler, actor_model_config
 
     def _build_rollout(self):
         from torch.distributed.device_mesh import init_device_mesh
-        # TODO(sgm): support FSDP hybrid shard for larger model
         infer_tp = self.config.rollout.tensor_model_parallel_size
         dp = self.world_size // infer_tp
-        assert self.world_size % infer_tp == 0, f'rollout world_size: {self.world_size} is not divisible by infer_tp: {infer_tp}'
         rollout_device_mesh = init_device_mesh('cuda', mesh_shape=(dp, infer_tp), mesh_dim_names=['dp', 'infer_tp'])
 
+        if self.config.rollout.name == 'mock':
+            from verl.workers.rollout.mock_rollout import MockRollout
+            from verl.workers.sharding_manager import BaseShardingManager
+            
+            rollout = MockRollout(
+                module=self.actor_module_fsdp,
+                config=self.config.rollout
+            )
+            rollout_sharding_manager = BaseShardingManager()
+            return rollout, rollout_sharding_manager
+        
         if self.config.rollout.name == 'hf':
             from verl.workers.rollout import HFRollout
             from verl.workers.sharding_manager import BaseShardingManager
@@ -681,7 +749,7 @@ class CriticWorker(Worker):
         # Note: We force turn off CPUOffload for critic because it causes incorrect results when using grad accumulation
         critic_module = FSDP(critic_module,
                              param_init_fn=init_fn,
-                             use_orig_params=False,
+                             use_orig_params=True,
                              auto_wrap_policy=auto_wrap_policy,
                              device_id=torch.cuda.current_device(),
                              sharding_strategy=sharding_strategy,
@@ -910,7 +978,7 @@ class RewardModelWorker(Worker):
         reward_module = FSDP(
             reward_module,
             param_init_fn=init_fn,
-            use_orig_params=False,
+            use_orig_params=True,
             auto_wrap_policy=auto_wrap_policy,
             device_id=torch.cuda.current_device(),
             sharding_strategy=sharding_strategy,  # zero3

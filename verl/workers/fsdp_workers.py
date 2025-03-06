@@ -343,45 +343,47 @@ class ActorRolloutRefWorker(Worker):
         return actor_module_fsdp, actor_optimizer, actor_lr_scheduler, actor_model_config
 
     def _build_rollout(self):
-        from torch.distributed.device_mesh import init_device_mesh
-        infer_tp = self.config.rollout.tensor_model_parallel_size
-        dp = self.world_size // infer_tp
-        rollout_device_mesh = init_device_mesh('cuda', mesh_shape=(dp, infer_tp), mesh_dim_names=['dp', 'infer_tp'])
+        rollout_name = self.config.rollout.name
+        logger.info(f"Building {rollout_name} rollout")
+        rollout_sharding_manager = self.ulysses_sharding_manager
 
-        if self.config.rollout.name == 'mock':
-            from verl.workers.rollout.mock_rollout import MockRollout
-            from verl.workers.sharding_manager import BaseShardingManager
-            
-            rollout = MockRollout(
-                module=self.actor_module_fsdp,
-                config=self.config.rollout
-            )
-            rollout_sharding_manager = BaseShardingManager()
-            return rollout, rollout_sharding_manager
+        # Extract the common parameters for rollout initialization
+        common_kwargs = {
+            "actor_module": self.actor_module_fsdp,
+            "config": self.config.rollout,
+            "tokenizer": self.tokenizer,
+            "model_hf_config": self.actor_model_config,
+        }
         
-        if self.config.rollout.name == 'hf':
-            from verl.workers.rollout import HFRollout
-            from verl.workers.sharding_manager import BaseShardingManager
-            rollout = HFRollout(module=self.actor_module_fsdp, config=self.config.rollout)
-            rollout_sharding_manager = BaseShardingManager()
-            # TODO: a sharding manager that do nothing?
-        elif self.config.rollout.name == 'vllm':
-            from verl.workers.rollout.vllm_rollout import vLLMRollout
-            from verl.workers.sharding_manager import FSDPVLLMShardingManager
-            log_gpu_memory_usage('Before building vllm rollout', logger=None)
-            rollout = vLLMRollout(actor_module=self.actor_module_fsdp,
-                                  config=self.config.rollout,
-                                  tokenizer=self.tokenizer,
-                                  model_hf_config=self.actor_model_config)
-            log_gpu_memory_usage('After building vllm rollout', logger=None)
-            if torch.distributed.get_world_size() == 1:
-                self.config.rollout.load_format = 'dummy_hf'
-            rollout_sharding_manager = FSDPVLLMShardingManager(module=self.actor_module_fsdp,
-                                                               inference_engine=rollout.inference_engine,
-                                                               model_config=self.actor_model_config,
-                                                               full_params='hf' in self.config.rollout.load_format,
-                                                               device_mesh=rollout_device_mesh)
-            log_gpu_memory_usage('After building sharding manager', logger=None)
+        # Add any additional parameters from the config
+        for key, value in self.config.rollout.items():
+            if key not in ['name', 'tensor_model_parallel_size']:
+                common_kwargs[key] = value
+
+        if rollout_name == "naive":
+            from verl.workers.rollout.naive import NaiveRollout
+            rollout = NaiveRollout(**common_kwargs)
+        elif rollout_name == "hf":
+            from verl.workers.rollout.hf_rollout.hf_rollout import HFRollout
+            rollout = HFRollout(**common_kwargs)
+        elif rollout_name == "vllm":
+            try:
+                from verl.workers.rollout.vllm_rollout.vllm_rollout import vLLMRollout
+                rollout = vLLMRollout(**common_kwargs)
+            except ImportError as e:
+                logger.error(f"Failed to import vLLMRollout: {e}")
+                raise ImportError(f"vLLM not available. Please install vLLM: {e}")
+        # Add support for moatless_vllm rollout
+        elif rollout_name == "moatless_vllm":
+            try:
+                from verl.workers.rollout.moatless_vllm_rollout import MoatlessVLLMRollout
+                rollout = MoatlessVLLMRollout(**common_kwargs)
+            except ImportError as e:
+                logger.error(f"Failed to import MoatlessVLLMRollout: {e}")
+                raise ImportError(f"MoatlessVLLMRollout not available. Please check dependencies: {e}")
+        else:
+            from verl.workers.rollout.vllm_rollout.vllm_rollout import vLLMRollout
+            rollout = vLLMRollout(**common_kwargs)
 
         return rollout, rollout_sharding_manager
 

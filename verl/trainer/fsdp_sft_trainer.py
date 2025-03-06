@@ -230,7 +230,7 @@ class FSDPSFTTrainer(object):
                 }
                 self.model = get_peft_model(self.model, LoraConfig(**lora_config))
 
-        if self.config.model.enable_gradient_checkpointing:
+        if self.config.model.:
             self.model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={'use_reentrant': False})
 
         log_gpu_memory_usage('After model allocation', logger=logger)

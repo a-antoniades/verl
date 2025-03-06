@@ -19,7 +19,7 @@ export BATCH_SIZE=1
 LEN_PROMPTS=20000
 
 export BASE_MODEL="/share/edc/home/antonis/weights/huggingface/models--Qwen--Qwen2.5-0.5B"
-export DATA_DIR="/share/edc/home/antonis/swe-gym-setup/verl/data/swe-bench/swe-verifier-50"
+export DATA_DIR="/share/edc/home/antonis/swe-gym-setup/verl/data/swe-bench/swe-verifier-50/"
 # /share/edc/home/antonis/swe-gym-setup/verl/data/swe-bench/debug
 export EXPERIMENT_NAME='verl_grpo_example_swe-bench'
 
@@ -51,7 +51,13 @@ python3 -m verl.trainer.main_ppo_swe \
     actor_rollout_ref.rollout.n=1 \
     actor_rollout_ref.rollout.name="mock" \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
+    +model.enable_gradient_checkpointing=true \
+    +trainer.offload_activations=true \
+    algorithm.kl_penalty=low_var_kl \
     algorithm.kl_ctrl.kl_coef=0.001 \
+    algorithm.kl_penalty="reverse_kl" \
+    +trainer.mixed_precision=true \
+    +trainer.max_grad_norm=1.0 \
     trainer.critic_warmup=0 \
     trainer.logger=['console'] \
     trainer.project_name=$EXPERIMENT_NAME \
@@ -61,7 +67,7 @@ python3 -m verl.trainer.main_ppo_swe \
     trainer.nnodes=1 \
     trainer.save_freq=-1 \
     trainer.test_freq=5 \
-    trainer.total_epochs=100 \
+    trainer.total_epochs=500 \
     +trainer.max_steps=2 \
     +bypass_testbed=true \
     +actor_rollout_ref.model.enable_lora=false \

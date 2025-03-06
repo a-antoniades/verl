@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from verl import DataProto
 import torch
 from verl.utils.reward_score import gsm8k, math, swe_bench
@@ -25,6 +26,11 @@ logging.basicConfig(
     force=True
 )
 logger = logging.getLogger(__name__)
+
+# Get log level from environment variable, default to INFO if not set
+log_level = os.getenv('VERL_LOG_LEVEL', 'DEBUG')
+logging.basicConfig(level=getattr(logging, log_level))
+
 logger.setLevel(logging.DEBUG)
 
 def _default_compute_score(data_source, solution_str, ground_truth, **kwargs):

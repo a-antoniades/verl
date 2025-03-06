@@ -9,6 +9,8 @@ from tensordict import TensorDict
 class MockRollout(BaseRollout):
     """
     A mock rollout class that pulls saved trajectories from a local DataFrame.
+    Each row corresponds to a single trajectory.
+    Note: Multiple trajectories can be present for each instance. (wrong/right etc.)
     This can be used for debugging/integration tests without requiring calling agent.
     """
 

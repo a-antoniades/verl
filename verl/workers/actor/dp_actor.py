@@ -255,17 +255,24 @@ class DataParallelPPOActor(BasePPOActor):
                 # compute policy loss
                 policy_loss = pg_loss - entropy_loss * entropy_coeff
 
+                # Apply KL loss if configured
                 if self.config.use_kl_loss:
                     ref_log_prob = data['ref_log_prob']
-                    # compute kl loss
                     kld = core_algos.kl_penalty(logprob=log_prob,
                                                 ref_logprob=ref_log_prob,
                                                 kl_penalty=self.config.kl_loss_type)
                     kl_loss = masked_mean(kld, response_mask)
-
                     policy_loss = policy_loss - kl_loss * self.config.kl_loss_coef
                     metrics['actor/kl_loss'] = kl_loss.detach().item()
                     metrics['actor/kl_coef'] = self.config.kl_loss_coef
+
+                # Apply length penalty if configured
+                if self.config.use_length_penalty and 'length_penalties' in data:
+                    length_penalties = data['length_penalties']
+                    length_loss = masked_mean(length_penalties, response_mask)
+                    policy_loss = policy_loss + length_loss * self.config.length_penalty_coef
+                    metrics['actor/length_loss'] = length_loss.detach().item()
+                    metrics['actor/length_coef'] = self.config.length_penalty_coef
 
                 if self.config.use_dynamic_bsz:
                     # relative to the dynamic bsz

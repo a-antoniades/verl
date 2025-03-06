@@ -79,7 +79,7 @@ def main():
         
     for i, node in enumerate(nodes):
         print(f"\n{'='*80}")
-        print(f"Node {node.get('node_id', i)}")
+        print(f"Node {node.get`('node_id', i)}")
         print('='*80)
         print_build_info(node)
 

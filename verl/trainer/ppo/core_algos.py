@@ -159,7 +159,7 @@ def compute_rewards(token_level_scores, old_log_prob, ref_log_prob, kl_ratio):
     return token_level_scores - kl * kl_ratio
 
 
-def compute_policy_loss(old_log_prob, log_prob, advantages, eos_mask, cliprange):
+def compute_policy_loss(old_log_prob, log_prob, advantages, eos_mask, cliprange, length_penalties=None, length_penalty_scale=1.0):
     """Adapted from https://github.com/huggingface/trl/blob/main/trl/trainer/ppo_trainer.py#L1122
 
     Args:
@@ -173,13 +173,18 @@ def compute_policy_loss(old_log_prob, log_prob, advantages, eos_mask, cliprange)
             shape: (bs, response_length)
         cliprange: (float)
             The clip range used in PPO. See https://arxiv.org/abs/1707.06347
+        length_penalties: Optional[torch.Tensor]
+            shape: (bs,) - penalties for length distribution
+        length_penalty_scale: float
+            Scale factor for length penalties
 
     Returns:
         pg_loss: `a scalar torch.Tensor`
             policy gradient loss computed via PPO
         pg_clipfrac: (float)
             a float number indicating the fraction of policy gradient loss being clipped
-
+        ppo_kl: (float)
+            KL divergence between old and new policy
     """
     negative_approx_kl = log_prob - old_log_prob
     ratio = torch.exp(negative_approx_kl)
@@ -190,6 +195,12 @@ def compute_policy_loss(old_log_prob, log_prob, advantages, eos_mask, cliprange)
 
     pg_loss = verl_F.masked_mean(torch.max(pg_losses, pg_losses2), eos_mask)
     pg_clipfrac = verl_F.masked_mean(torch.gt(pg_losses2, pg_losses).float(), eos_mask)
+
+    # Add length penalty if provided
+    if length_penalties is not None:
+        # Add batch-wise length penalties to policy loss
+        pg_loss = pg_loss + length_penalty_scale * length_penalties.mean()
+
     return pg_loss, pg_clipfrac, ppo_kl
 
 
@@ -251,6 +262,10 @@ def kl_penalty(logprob: torch.FloatTensor, ref_logprob: torch.FloatTensor, kl_pe
     """
     if kl_penalty == "kl":
         return logprob - ref_logprob
+    
+    if kl_penalty == "reverse_kl":
+        print(f"Computing reverse KL divergence")
+        return ref_logprob - logprob
 
     if kl_penalty == "abs":
         return (logprob - ref_logprob).abs()

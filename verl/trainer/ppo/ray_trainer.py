@@ -34,6 +34,15 @@ from verl.single_controller.ray import RayResourcePool, RayWorkerGroup, RayClass
 from verl.single_controller.ray.base import create_colocated_worker_cls
 from verl.trainer.ppo import core_algos
 from verl.utils.seqlen_balancing import get_seqlen_balanced_partitions, log_seqlen_unbalance
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Get log level from environment variable, default to INFO if not set
+log_level = os.getenv('VERL_LOG_LEVEL', 'DEBUG')
+logging.basicConfig(level=getattr(logging, log_level))
+
+logger.setLevel(logging.DEBUG)
 
 WorkerType = Type[Worker]
 
@@ -197,6 +206,24 @@ def compute_data_metrics(batch, use_critic=True):
         return_diff_var = torch.var(valid_returns - valid_values)
         return_var = torch.var(valid_returns)
 
+    # Get sequence-level scores that represent correctness
+    sequence_scores = batch.batch['token_level_scores'].sum(-1)  # (batch_size,)
+    
+    # Get response lengths
+    response_mask = batch.batch['attention_mask'][:, -max_response_length:].bool()
+    response_length = response_mask.sum(-1).float()  # (batch_size,)
+
+    # Calculate Pearson correlation between length and difficulty (1-score)
+    difficulty = 1 - (sequence_scores - sequence_scores.min()) / (sequence_scores.max() - sequence_scores.min() + 1e-8)
+    
+    # Use proper correlation coefficient
+    length_difficulty_corr = torch.corrcoef(torch.stack([response_length, difficulty]))[0,1].item()
+    
+    # Also calculate average lengths for high/low difficulty questions
+    median_difficulty = torch.median(difficulty)
+    hard_question_mask = difficulty > median_difficulty
+    easy_question_mask = ~hard_question_mask
+    
     metrics = {
         # score
         'critic/score/mean':
@@ -253,7 +280,33 @@ def compute_data_metrics(batch, use_critic=True):
             torch.min(prompt_length).detach().item(),
         'prompt_length/clip_ratio':
             torch.mean(torch.eq(prompt_length, max_prompt_length).float()).detach().item(),
+        
+        # Correlation between length and difficulty
+        'generation/length_difficulty_correlation': length_difficulty_corr,
+        
+        # Average lengths for different difficulty levels
+        'generation/hard_question_avg_length': response_length[hard_question_mask].mean().item(),
+        'generation/easy_question_avg_length': response_length[easy_question_mask].mean().item(),
+        
+        # Raw statistics
+        'generation/mean_difficulty': difficulty.mean().item(),
+        'generation/difficulty_std': difficulty.std().item(),
+        'generation/length_std': response_length.std().item(),
     }
+    
+    # Store raw data for analysis
+    raw_data = [
+        {
+            "difficulty": diff.item(),
+            "response_length": length.item(),
+            "raw_score": score.item(),
+        }
+        for diff, length, score in zip(difficulty, response_length, sequence_scores)
+    ]
+    if not hasattr(batch, 'raw_data_collection'):
+        batch.raw_data_collection = []
+    batch.raw_data_collection.extend(raw_data)
+    
     return metrics
 
 
@@ -645,12 +698,29 @@ class RayPPOTrainer(object):
                         else:
                             batch.batch['token_level_rewards'] = batch.batch['token_level_scores']
 
-                        # compute advantages, executed on the driver process
+                        # Compute length penalties (always, for metrics)
+                        length_penalties, length_metrics = self.compute_length_penalty(
+                            batch,
+                            window_size=self.config.actor_rollout_ref.actor.get('length_window_size', 1000)
+                        )
+
+                        # Always log metrics
+                        metrics.update(length_metrics)
+                        if length_penalties is not None:
+                            metrics.update({'actor/length_penalty': length_penalties.mean().item()})
+
+                        # Only store in batch if enabled
+                        if (hasattr(self.config.actor_rollout_ref.actor, 'use_length_penalty') and 
+                            self.config.actor_rollout_ref.actor.use_length_penalty and 
+                            length_penalties is not None):
+                            
+                            batch.batch['length_penalties'] = length_penalties
+
+                        # compute advantages
                         batch = compute_advantage(batch,
                                                   adv_estimator=self.config.algorithm.adv_estimator,
                                                   gamma=self.config.algorithm.gamma,
-                                                  lam=self.config.algorithm.lam,
-                                                  num_repeat=self.config.actor_rollout_ref.rollout.n)
+                                                  lam=self.config.algorithm.lam)
 
                     # update critic
                     if self.use_critic:
@@ -696,3 +766,88 @@ class RayPPOTrainer(object):
                         pprint(f'Final validation metrics: {val_metrics}')
                         logger.log(data=val_metrics, step=self.global_steps)
                     return
+
+    def compute_length_penalty(self, data: DataProto, window_size=1000):
+        """
+        Compute length penalty to encourage longer responses for harder problems.
+        Uses global history across all instances rather than per-instance tracking.
+        All distributions (lengths and probabilities) are computed globally.
+        """
+        # Get current batch info
+        responses = data.batch['responses']
+        response_length = responses.size(1)
+        attention_mask = data.batch['attention_mask']
+        response_mask = attention_mask[:, -response_length:]
+        
+        # Calculate actual lengths for each response
+        lengths = response_mask.sum(dim=-1)  # (batch_size,)
+        
+        # Get correctness probabilities from scores
+        token_level_scores = data.batch['token_level_scores']
+        sequence_scores = token_level_scores.sum(dim=-1)  # (batch_size,)
+        
+        # Initialize or update global history
+        if not hasattr(self, 'global_history'):
+            self.global_history = {
+                'lengths': [],
+                'scores': []
+            }
+        
+        # Update global history with current batch
+        self.global_history['lengths'].extend(lengths.tolist())
+        self.global_history['scores'].extend(sequence_scores.tolist())
+        
+        # Keep only last window_size items
+        if len(self.global_history['lengths']) > window_size:
+            self.global_history['lengths'] = self.global_history['lengths'][-window_size:]
+            self.global_history['scores'] = self.global_history['scores'][-window_size:]
+        
+        # Check if we have enough history
+        has_enough_history = len(self.global_history['lengths']) >= window_size
+        
+        if not has_enough_history:
+            logger.info(f"Not enough global history yet (need {window_size} samples). "
+                       f"Current history size: {len(self.global_history['lengths'])}")
+            return None, {
+                'length/mean': lengths.float().mean().item(),
+                'length/std': lengths.float().std().item(),
+                'length/history_size': len(self.global_history['lengths']),
+                'length/penalty_mean': 0.0
+            }
+        
+        # Convert everything to tensors on the right device and dtype
+        hist_lengths = torch.tensor(self.global_history['lengths'], device=lengths.device, dtype=torch.float32)
+        hist_scores = torch.tensor(self.global_history['scores'], device=sequence_scores.device, dtype=torch.float32)
+        
+        # Convert lengths to float32 as well
+        lengths = lengths.float()
+        sequence_scores = sequence_scores.float()
+        
+        # Compute normalized lengths using global history
+        normalized_lengths = (lengths - hist_lengths.mean()) / (hist_lengths.std() + 1e-8)
+        normalized_scores = (sequence_scores - hist_scores.mean()) / (hist_scores.std() + 1e-8)
+        
+        # Convert both to probabilities in [0,1] using global distributions
+        length_prob = torch.sigmoid(normalized_lengths)
+        score_prob = torch.sigmoid(normalized_scores)
+        reverse_score_prob = 1 - score_prob  # Higher value means harder problem
+        
+        # Compute cross entropy loss using globally normalized distributions
+        length_penalty = -(reverse_score_prob * torch.log(length_prob + 1e-8) + 
+                          (1 - reverse_score_prob) * torch.log(1 - length_prob + 1e-8))
+        
+        metrics = {
+            'length/mean': lengths.mean().item(),
+            'length/std': lengths.std().item(),
+            'length/penalty_mean': length_penalty.mean().item(),
+            'length/correlation': torch.corrcoef(torch.stack([lengths.float(), sequence_scores]))[0,1].item(),
+            'length/history_size': len(self.global_history['lengths']),
+            'length/max': lengths.max().item(),
+            'length/min': lengths.min().item(),
+            'score/mean': sequence_scores.mean().item(),
+            'score/std': sequence_scores.std().item(),
+            'score/normalized_mean': normalized_scores.mean().item(),
+            'score/normalized_std': normalized_scores.std().item()
+        }
+        
+        return length_penalty, metrics

@@ -27,6 +27,10 @@ from moatless.benchmark.swebench import create_repository, create_index
 from moatless.benchmark.evaluation import load_instances
 import shutil
 
+# Get log level from environment variable, default to INFO if not set
+log_level = os.getenv('VERL_LOG_LEVEL', 'DEBUG')
+logging.basicConfig(level=getattr(logging, log_level))
+
 # Configure testbed server URL
 os.environ['TESTBED_SERVER_URL'] = 'http://testbeds.moatless.ai'  # This is from your working test logs
 
@@ -49,6 +53,7 @@ logger = logging.getLogger(__name__)
 for logger_name in ['testbeds.sdk.sdk', 'testbeds.sdk.client', 'moatless.runtime.testbed']:
     logging.getLogger(logger_name).setLevel(logging.INFO)
     logging.getLogger(logger_name).propagate = True
+
 
 def _default_compute_score(data_source, solution_str, ground_truth, testbed_manager=None, **kwargs):
     logger.debug(f"Computing score for {data_source}")

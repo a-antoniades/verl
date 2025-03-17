@@ -13,4 +13,5 @@ pip install -e /share/edc/home/antonis/_swe-planner/moatless-tree-search/moatles
 conda install sqlite -y
 pip install flash-attn --no-build-isolation
 pip install -e .
+pip install wandb
 

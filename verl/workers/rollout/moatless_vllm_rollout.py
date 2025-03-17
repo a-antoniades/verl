@@ -47,6 +47,7 @@ except ImportError:
     HAS_VLLM = False
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)  # Set to DEBUG for more verbose logging
 
 class VLLMServerAdapter:
     """
@@ -116,19 +117,12 @@ class VLLMServerAdapter:
             temperature=params.get("temperature", 1.0),
             top_p=params.get("top_p", 1.0),
             max_tokens=params.get("max_tokens", 16),
+            logprobs=params.get("logprobs") is not None
         )
-        
-        # Enable logprobs if requested - this requires special handling
-        logprobs_requested = params.get("logprobs") is not None
         
         # Generate completions
         try:
-            # Prepare the request for generation
             logger.info(f"Generating completion for prompt of length {len(prompt)}")
-            
-            # Handle logprobs specially since implementation might vary between vLLM versions
-            if logprobs_requested and hasattr(sampling_params, 'logprobs'):
-                sampling_params.logprobs = True
             
             # Generate using vLLM
             outputs = self.llm_engine.generate(prompt, sampling_params)
@@ -145,24 +139,9 @@ class VLLMServerAdapter:
                         "text": output.outputs[0].text,
                         "index": 0,
                         "finish_reason": output.outputs[0].finish_reason,
+                        "logprobs": output.outputs[0].logprobs if hasattr(output.outputs[0], "logprobs") else None
                     }]
                 }
-                
-                # Add logprobs if available
-                if logprobs_requested:
-                    # Try different ways to access logprobs based on vLLM version
-                    logprobs_value = None
-                    if hasattr(output.outputs[0], "logprobs"):
-                        logprobs_value = output.outputs[0].logprobs
-                    elif hasattr(output, "logprobs"):
-                        logprobs_value = output.logprobs
-                    
-                    if logprobs_value is not None:
-                        completion["choices"][0]["logprobs"] = logprobs_value
-                    else:
-                        # Provide empty logprobs if requested but not available
-                        completion["choices"][0]["logprobs"] = []
-                
                 completions.append(completion)
             
             return {"completions": completions}
@@ -390,10 +369,15 @@ class MoatlessVLLMRollout(BaseRollout):
 
     def _setup_env(self):
         """Set up environment variables for moatless-tools."""
-        # Instead of setting external API URLs, we'll use our adapter
-        # But we'll set dummy values to avoid errors in moatless-tools
+        # Set dummy values for API endpoints - these are just placeholders
         os.environ["CUSTOM_LLM_API_BASE"] = "http://localhost:8000/v1"
         os.environ["CUSTOM_LLM_API_KEY"] = "not-needed"
+        
+        # Set Hugging Face environment variables
+        os.environ["HUGGINGFACE_API_BASE"] = "http://localhost:8000/v1"
+        os.environ["HUGGINGFACE_API_KEY"] = "not-needed"
+        
+        # Update PYTHONPATH
         os.environ["PYTHONPATH"] = f"{self.moatless_path}:{os.environ.get('PYTHONPATH', '')}"
         
         # Set a flag to indicate we're using the adapter
@@ -415,31 +399,19 @@ class MoatlessVLLMRollout(BaseRollout):
             original_completion = litellm.completion
             
             # Create a reference to self that can be used in the patched function
-            # This avoids issues with method binding
             adapter = self.server_adapter
             logger_ref = logger
             
-            # Add a helper function to determine if this is a local model path
-            def is_local_model_path(model_path):
-                return isinstance(model_path, str) and (
-                    model_path.startswith('/') or
-                    model_path.startswith(self.model_path)
-                )
-            
-            # Add a helper to format model path for LiteLLM if we're not handling it
-            def format_model_for_litellm(model_path):
-                if is_local_model_path(model_path):
-                    return f"openai/{model_path}"
-                return model_path
-            
             # Define a replacement function that uses our adapter
             def patched_completion(*args, **kwargs):
-                # Check if this is a request we should handle
-                if os.environ.get("VERL_VLLM_ADAPTER") == "1" and kwargs.get("model", "").startswith("openai/"):
-                    logger_ref.info(f"Intercepting LiteLLM completion call for model {kwargs.get('model')}")
+                model = kwargs.get("model", "")
+                logger_ref.info(f"LiteLLM completion called with model: {model}")
+                
+                # Always intercept when VERL_VLLM_ADAPTER is enabled
+                if os.environ.get("VERL_VLLM_ADAPTER") == "1":
+                    logger_ref.info(f"Intercepting LiteLLM completion call for model {model}")
                     
                     # Extract parameters from kwargs
-                    model = kwargs.get("model", "")
                     prompt = kwargs.get("prompt", "")
                     messages = kwargs.get("messages", None)
                     temperature = kwargs.get("temperature", 1.0)
@@ -447,208 +419,71 @@ class MoatlessVLLMRollout(BaseRollout):
                     max_tokens = kwargs.get("max_tokens", 1024)
                     logprobs = kwargs.get("logprobs", None)
                     
-                    # Format the model for LiteLLM if needed
-                    kwargs["model"] = format_model_for_litellm(model)
-                    
                     # Determine request type based on input
                     if messages is not None:
                         # This is a chat completion request
                         adapter_params = {
                             "type": "chat_completions",
-                            "model": kwargs["model"],
+                            "model": model,  # Use the original model string
                             "messages": messages,
                             "temperature": temperature,
                             "top_p": top_p,
                             "max_tokens": max_tokens,
                             "logprobs": logprobs
                         }
-                        
-                        # Make the request to our adapter
-                        result = adapter.make_request(adapter_params)
-                        
-                        # Convert the result to the expected format for LiteLLM
-                        if "error" in result:
-                            logger_ref.error(f"Error in adapter request: {result['error']}")
-                            # Return empty response to avoid breaking the pipeline
-                            return {
-                                "choices": [{
-                                    "message": {"content": f"Error: {result['error']}"},
-                                    "logprobs": None
-                                }]
-                            }
-                        
-                        # Return the chat completion result
-                        chat_response = result.get("chat_completions", [{}])[0]
-                        return chat_response
                     else:
                         # This is a text completion request
                         adapter_params = {
                             "type": "completions",
-                            "model": kwargs["model"],
+                            "model": model,  # Use the original model string
                             "prompt": prompt,
                             "temperature": temperature,
                             "top_p": top_p,
                             "max_tokens": max_tokens,
                             "logprobs": logprobs
                         }
-                        
-                        # Make the request to our adapter
-                        result = adapter.make_request(adapter_params)
-                        
-                        # Convert the result to the expected format for LiteLLM
-                        if "error" in result:
-                            logger_ref.error(f"Error in adapter request: {result['error']}")
-                            # Return empty response to avoid breaking the pipeline
+                    
+                    # Make the request to our adapter
+                    result = adapter.make_request(adapter_params)
+                    
+                    # Check for errors
+                    if "error" in result:
+                        logger_ref.error(f"Error in adapter request: {result['error']}")
+                        # Return empty response to avoid breaking the pipeline
+                        if messages is not None:
+                            return {
+                                "choices": [{
+                                    "message": {"content": f"Error: {result['error']}"},
+                                    "logprobs": None
+                                }]
+                            }
+                        else:
                             return {
                                 "choices": [{
                                     "text": f"Error: {result['error']}",
                                     "logprobs": None
                                 }]
                             }
-                        
-                        # Return the completion result
+                    
+                    # Return the appropriate result
+                    if messages is not None:
+                        chat_response = result.get("chat_completions", [{}])[0]
+                        logger_ref.debug(f"Adapter request successful for model: {model}")
+                        return chat_response
+                    else:
                         completion_response = result.get("completions", [{}])[0]
+                        logger_ref.debug(f"Adapter request successful for model: {model}")
                         return completion_response
                 else:
-                    # Format the model for LiteLLM if needed
-                    kwargs["model"] = format_model_for_litellm(kwargs.get("model", ""))
+                    # For requests we're not handling, use the original function
                     return original_completion(*args, **kwargs)
             
-            # Apply the patch using functools.wraps to preserve function metadata
-            @functools.wraps(original_completion)
-            def wrapped_patched_completion(*args, **kwargs):
-                return patched_completion(*args, **kwargs)
-            
             # Apply the patch
-            litellm.completion = wrapped_patched_completion
+            litellm.completion = patched_completion
             logger.info("Successfully patched litellm.completion")
-            
-            # Try to patch other relevant functions if needed
-            try:
-                # Check if chat completion is available
-                if hasattr(litellm, "completion_with_retries"):
-                    original_completion_with_retries = litellm.completion_with_retries
-                    
-                    @functools.wraps(original_completion_with_retries)
-                    def wrapped_patched_completion_with_retries(*args, **kwargs):
-                        # Use our patched completion for the underlying call
-                        result = patched_completion(*args, **kwargs)
-                        return result
-                    
-                    litellm.completion_with_retries = wrapped_patched_completion_with_retries
-                    logger.info("Successfully patched litellm.completion_with_retries")
-            except Exception as e:
-                logger.warning(f"Could not patch additional litellm functions: {e}")
             
         except ImportError:
             logger.warning("Could not patch litellm - it may not be installed")
-        
-        # Try to patch any other libraries that moatless might use
-        # For example, if it uses the OpenAI client directly
-        try:
-            import openai
-            
-            if hasattr(openai, "Completion") and hasattr(openai.Completion, "create"):
-                original_openai_completion = openai.Completion.create
-                
-                # Create a reference to self that can be used in the patched function
-                adapter = self.server_adapter
-                
-                def patched_openai_completion(*args, **kwargs):
-                    # Check if this is a request we should handle
-                    if os.environ.get("VERL_VLLM_ADAPTER") == "1" and kwargs.get("model", "").startswith("openai/"):
-                        logger.info(f"Intercepting OpenAI completion call for model {kwargs.get('model')}")
-                        
-                        # Format the model for LiteLLM if needed
-                        kwargs["model"] = format_model_for_litellm(kwargs.get("model"))
-                        
-                        # Convert to our adapter format
-                        adapter_params = {
-                            "type": "completions",
-                            "model": kwargs["model"],
-                            "prompt": kwargs.get("prompt", ""),
-                            "temperature": kwargs.get("temperature", 1.0),
-                            "top_p": kwargs.get("top_p", 1.0),
-                            "max_tokens": kwargs.get("max_tokens", 16),
-                            "logprobs": kwargs.get("logprobs", None)
-                        }
-                        
-                        # Make the request to our adapter
-                        result = adapter.make_request(adapter_params)
-                        
-                        # Convert the result to the OpenAI format
-                        if "error" in result:
-                            # Return empty response to avoid breaking the pipeline
-                            return openai.Completion.construct_from({
-                                "choices": [{
-                                    "text": f"Error: {result['error']}",
-                                    "logprobs": None
-                                }]
-                            })
-                        
-                        # Return the completion
-                        return openai.Completion.construct_from(result.get("completions", [{}])[0])
-                    else:
-                        # Format the model for LiteLLM if needed
-                        kwargs["model"] = format_model_for_litellm(kwargs.get("model"))
-                        return original_openai_completion(*args, **kwargs)
-                
-                # Apply the patch
-                openai.Completion.create = patched_openai_completion
-                logger.info("Successfully patched openai.Completion.create")
-            
-            # Patch ChatCompletion as well if it exists
-            if hasattr(openai, "ChatCompletion") and hasattr(openai.ChatCompletion, "create"):
-                original_openai_chat_completion = openai.ChatCompletion.create
-                
-                # Create a reference to self that can be used in the patched function
-                adapter = self.server_adapter
-                
-                def patched_openai_chat_completion(*args, **kwargs):
-                    # Check if this is a request we should handle
-                    if os.environ.get("VERL_VLLM_ADAPTER") == "1" and kwargs.get("model", "").startswith("openai/"):
-                        logger.info(f"Intercepting OpenAI chat completion call for model {kwargs.get('model')}")
-                        
-                        # Format the model for LiteLLM if needed
-                        kwargs["model"] = format_model_for_litellm(kwargs.get("model"))
-                        
-                        # Convert to our adapter format
-                        adapter_params = {
-                            "type": "chat_completions",
-                            "model": kwargs["model"],
-                            "messages": kwargs.get("messages", []),
-                            "temperature": kwargs.get("temperature", 1.0),
-                            "top_p": kwargs.get("top_p", 1.0),
-                            "max_tokens": kwargs.get("max_tokens", 16),
-                            "logprobs": kwargs.get("logprobs", None)
-                        }
-                        
-                        # Make the request to our adapter
-                        result = adapter.make_request(adapter_params)
-                        
-                        # Convert the result to the OpenAI format
-                        if "error" in result:
-                            # Return empty response to avoid breaking the pipeline
-                            return openai.ChatCompletion.construct_from({
-                                "choices": [{
-                                    "message": {"content": f"Error: {result['error']}"},
-                                    "logprobs": None
-                                }]
-                            })
-                        
-                        # Return the chat completion
-                        return openai.ChatCompletion.construct_from(result.get("chat_completions", [{}])[0])
-                    else:
-                        # Format the model for LiteLLM if needed
-                        kwargs["model"] = format_model_for_litellm(kwargs.get("model"))
-                        return original_openai_chat_completion(*args, **kwargs)
-                
-                # Apply the patch
-                openai.ChatCompletion.create = patched_openai_chat_completion
-                logger.info("Successfully patched openai.ChatCompletion.create")
-                
-        except ImportError:
-            logger.warning("Could not patch OpenAI client - it may not be installed")
     
     @contextmanager
     def update_sampling_params(self, **kwargs):
@@ -695,6 +530,7 @@ class MoatlessVLLMRollout(BaseRollout):
         logger.info(f"Loading {batch_size} pre-computed trajectories from dataset")
         
         # Get the next batch of examples
+        
         examples = self._get_next_batch(batch_size)
         
         # Convert to DataProto format
@@ -911,6 +747,7 @@ class MoatlessVLLMRollout(BaseRollout):
             "--selector_type", "depth_first",
             "--max_trajectory_depth", "20",
             "--use_testbed",
+            "--overwrite",
             "--instance_ids", instance_id  
         ]
         
@@ -956,3 +793,24 @@ class MoatlessVLLMRollout(BaseRollout):
             return result.returncode == 0
         except:
             return False
+
+    def _get_litellm_model_path(self, model_path):
+        """
+        Convert a model path to the format expected by LiteLLM.
+        
+        Args:
+            model_path: Original model path
+            
+        Returns:
+            str: Model path formatted for LiteLLM
+        """
+        # If it's already prefixed, return as is
+        if model_path.startswith('openai/') or model_path.startswith('anthropic/') or model_path.startswith('huggingface/'):
+            return model_path
+        
+        # If it's a local path, add huggingface/ prefix
+        if model_path.startswith('/'):
+            return f"huggingface/{model_path}"
+        
+        # Default to openai/ prefix for other cases
+        return f"openai/{model_path}"

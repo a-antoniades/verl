@@ -16,7 +16,7 @@ export RAY_WORKER_LOG_TO_DRIVER=1
 export N_GPUS=1
 export ROLLOUT_TP_SIZE=1
 export BATCH_SIZE=1
-LEN_PROMPTS=20000
+LEN_PROMPTS=2000
 
 export BASE_MODEL="/share/edc/home/antonis/weights/huggingface/models--Qwen--Qwen2.5-0.5B"
 export DATA_DIR="/share/edc/home/antonis/swe-gym-setup/verl/data/swe-bench/swe-verifier-50/"
@@ -32,8 +32,8 @@ python3 -m verl.trainer.main_ppo_swe \
     data.val_files=$DATA_DIR/train.parquet \
     data.train_batch_size=$BATCH_SIZE \
     data.val_batch_size=$BATCH_SIZE \
-    data.max_prompt_length=$LEN_PROMPTS \
-    data.max_response_length=$LEN_PROMPTS \
+    data.max_prompt_length=2000 \
+    data.max_response_length=2000 \
     actor_rollout_ref.model.path=$BASE_MODEL \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=True \

@@ -9,12 +9,25 @@ VERL_PATH="/share/edc/home/antonis/swe-gym-setup/verl"
 OUTPUT_DIR="${VERL_PATH}/data/moatless_trajectories"
 DATASET_PATH="${VERL_PATH}/data/moatless_dataset.parquet"
 
-# Model configuration
-MODEL="/share/edc/home/antonis/weights/huggingface/models--Qwen--Qwen2.5-0.5B"
+# Model configuration - use a simple path for the model
+MODEL="/tmp/qwen-model"
 FORMAT="window"
 
+# Set environment variables to control model path handling
+export VERL_VLLM_ADAPTER="1"
+export CUSTOM_LLM_API_BASE="http://localhost:8000/v1"
+export CUSTOM_LLM_API_KEY="not-needed"
+export HUGGINGFACE_API_KEY="not-needed"
+export HUGGINGFACE_API_BASE="http://localhost:8000/v1"
+
+# Add debug logging
+export VERL_LOG_LEVEL=DEBUG
+
+# Create a symbolic link with a simpler path
+ln -sf /share/edc/home/antonis/weights/huggingface/models--Qwen--Qwen2.5-0.5B /tmp/qwen-model
+
 # Training configuration
-N_GPUS=4
+N_GPUS=2
 TRAIN_BATCH_SIZE=32
 VAL_BATCH_SIZE=16
 EXPERIMENT_NAME="verl_moatless_vllm_swe_bench"
@@ -22,14 +35,11 @@ EXPERIMENT_NAME="verl_moatless_vllm_swe_bench"
 # Create output directory
 mkdir -p "$OUTPUT_DIR"
 
-# Step 1: Generate data and train in one go
-echo "Running moatless-tree-search with veRL's vLLM engine"
-
 # Set environment variables
-export VERL_LOG_LEVEL=INFO
 export PYTHONPATH="${MOATLESS_PATH}:${PYTHONPATH}"
 
 # Run VERL with moatless_vllm rollout
+echo "Running moatless-tree-search with veRL's vLLM engine"
 python -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     data.train_files="${VERL_PATH}/data/gsm8k/train.parquet" \
@@ -46,7 +56,7 @@ python -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.use_kl_loss=True \
     actor_rollout_ref.actor.kl_loss_coef=0.001 \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
-    actor_rollout_ref.rollout.name=moatless_vllm \
+    actor_rollout_ref.rollout.name="moatless_vllm" \
     +actor_rollout_ref.rollout.moatless_path="$MOATLESS_PATH" \
     +actor_rollout_ref.rollout.output_dir="$OUTPUT_DIR" \
     +actor_rollout_ref.rollout.model="$MODEL" \

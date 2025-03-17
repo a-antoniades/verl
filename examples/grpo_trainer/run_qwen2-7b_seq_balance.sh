@@ -1,16 +1,21 @@
 set -x
 
+# Add these near the top of your script
+export CUDA_LAUNCH_BLOCKING=1  # For better error reporting
+export NCCL_P2P_DISABLE=1  # If having GPU communication issues
+export NCCL_DEBUG=INFO  # For debugging distributed training
+
 # Add this line to set logging level
 export VERL_LOG_LEVEL=INFO  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
 
 export VLLM_ATTENTION_BACKEND=XFORMERS
 # Automatically detect number of available GPUs using nvidia-smi
-export N_GPUS=2
+export N_GPUS=1
 export BASE_MODEL="/share/edc/home/antonis/weights/huggingface/models--Qwen--Qwen2.5-0.5B"
 export DATA_DIR="/share/edc/home/antonis/swe-gym-setup/verl/data/gsm8k"
-export ROLLOUT_TP_SIZE=1
+export ROLLOUT_TP_SIZE=$N_GPUS
 export EXPERIMENT_NAME='verl_grpo_length_gsm8k_small'
-export TRAIN_BATCH_SIZE=640  # Reduce this
+export TRAIN_BATCH_SIZE=64  # Reduce this
 export PPO_MINI_BATCH_SIZE=$((TRAIN_BATCH_SIZE / 4))
 export VAL_BATCH_SIZE=$((TRAIN_BATCH_SIZE))  # 1.28x train batch size
 export MAX_TOKEN_LEN_PER_GPU=$((TRAIN_BATCH_SIZE * 24))  # 24x train batch size
@@ -46,7 +51,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
     actor_rollout_ref.rollout.tensor_model_parallel_size=$ROLLOUT_TP_SIZE \
-    actor_rollout_ref.rollout.name=vllm \
+    actor_rollout_ref.rollout.name="sglang" \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.7 \
     actor_rollout_ref.rollout.n=5 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \

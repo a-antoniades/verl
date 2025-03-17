@@ -13,9 +13,9 @@ export MOATLESS_LOG_LEVEL=DEBUG
 # Set to use CPU
 export VLLM_ATTENTION_BACKEND=XFORMERS
 export RAY_WORKER_LOG_TO_DRIVER=1
-export N_GPUS=1
+export N_GPUS=2
 export ROLLOUT_TP_SIZE=1
-export BATCH_SIZE=1
+export BATCH_SIZE=2
 LEN_PROMPTS=20000
 
 export BASE_MODEL="/share/edc/home/antonis/weights/huggingface/models--Qwen--Qwen2.5-0.5B"
@@ -37,19 +37,22 @@ python3 -m verl.trainer.main_ppo_swe \
     actor_rollout_ref.model.path=$BASE_MODEL \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=True \
-    actor_rollout_ref.actor.ppo_mini_batch_size=1 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=$N_GPUS \
     actor_rollout_ref.actor.use_dynamic_bsz=True \
     actor_rollout_ref.actor.ppo_max_token_len_per_gpu=$(($LEN_PROMPTS + 5000)) \
     actor_rollout_ref.actor.use_kl_loss=True \
     actor_rollout_ref.actor.kl_loss_coef=0.001 \
     actor_rollout_ref.actor.kl_loss_type=low_var_kl \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
+    actor_rollout_ref.actor.fsdp_config.model_dtype='bf16' \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
-    actor_rollout_ref.actor.fsdp_config.grad_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
+    actor_rollout_ref.actor.fsdp_config.mixed_precision.param_dtype='bf16' \
+    actor_rollout_ref.actor.fsdp_config.mixed_precision.reduce_dtype='fp32' \
+    actor_rollout_ref.actor.fsdp_config.mixed_precision.buffer_dtype='fp32' \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.n=1 \
-    actor_rollout_ref.rollout.name="moatless_vllm" \
+    actor_rollout_ref.rollout.name="vllm" \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     +model.enable_gradient_checkpointing=true \
     +trainer.offload_activations=true \

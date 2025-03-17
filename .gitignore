@@ -1,3 +1,4 @@
+
 **/*.pt
 **/checkpoints
 **/wget-log
@@ -120,3 +121,13 @@ data
 
 **/TRL
 
+# ckpt
+*.lock
+
+# data
+*.parquet
+
+
+# local logs
+logs
+log

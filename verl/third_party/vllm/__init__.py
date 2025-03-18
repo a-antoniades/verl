@@ -48,7 +48,7 @@ elif package_version == '0.6.3':
     from .vllm_v_0_6_3.llm import LLM
     from .vllm_v_0_6_3.llm import LLMEngine
     from .vllm_v_0_6_3 import parallel_state
-    from .vllm_v_0_6_3.async_llm_engine import AsyncLLMEngine, AsyncEngineArgs
+    # from .vllm_v_0_6_3.async_llm_engine import AsyncLLMEngine, AsyncEngineArgs
 elif package_version == '0.6.3+rocm624':
     vllm_version = '0.6.3'
     from .vllm_v_0_6_3.llm import LLM

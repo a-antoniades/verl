@@ -156,10 +156,10 @@ class SGLangRollout(BaseRollout):
             # NOTE(Chenyang): if you want to debug the sglang engine
             # please set the following parameters
             # Otherwise, it will make the engine run too slow
-            # log_level="INFO",
-            # log_requests=True,
-            # log_requests_level=2,
-            # max_running_requests=1,
+            log_level="INFO",
+            log_requests=True,
+            log_requests_level=2,
+            max_running_requests=1,
         )
 
         # offload

@@ -5,25 +5,27 @@ export VERL_LOG_LEVEL=INFO  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
 
 export VLLM_ATTENTION_BACKEND=XFORMERS
 # Automatically detect number of available GPUs using nvidia-smi
-export N_GPUS=1
+export N_GPUS=2
 export BASE_MODEL="/share/edc/home/antonis/weights/huggingface/models--Qwen--Qwen2.5-0.5B"
 export DATA_DIR="/share/edc/home/antonis/swe-gym-setup/verl/data/gsm8k"
 export ROLLOUT_TP_SIZE=1
 export EXPERIMENT_NAME='verl_grpo_length_gsm8k_small'
-export TRAIN_BATCH_SIZE=640  # Reduce this
+export TRAIN_BATCH_SIZE=64  # Reduce this
 export PPO_MINI_BATCH_SIZE=$((TRAIN_BATCH_SIZE / 4))
 export VAL_BATCH_SIZE=$((TRAIN_BATCH_SIZE))  # 1.28x train batch size
 export MAX_TOKEN_LEN_PER_GPU=$((TRAIN_BATCH_SIZE * 24))  # 24x train batch size
 
-# Memory management
-export RAY_memory_threshold=0.90
-export RAY_memory_monitor_refresh_ms=100
-export RAY_object_store_memory=50000000000  # 50GB limit for Ray's object store
-export RAY_memory_usage_threshold=0.95
+# # Memory management
+# export RAY_memory_threshold=0.90
+# export RAY_memory_monitor_refresh_ms=100
+# export RAY_object_store_memory=50000000000  # 50GB limit for Ray's object store
+# export RAY_memory_usage_threshold=0.95
 
-# Reduce number of Ray workers
-export RAY_actor_concurrency=2  # Limit concurrent actor tasks
-export RAY_max_actor_restarts=3
+# # Reduce number of Ray workers
+# export RAY_actor_concurrency=2  # Limit concurrent actor tasks
+# export RAY_max_actor_restarts=3
+
+export WANDB_MODE=disabled
 
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
@@ -47,12 +49,12 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
     actor_rollout_ref.rollout.tensor_model_parallel_size=$ROLLOUT_TP_SIZE \
     actor_rollout_ref.rollout.name="sglang" \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.7 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
     actor_rollout_ref.rollout.n=5 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     algorithm.kl_ctrl.kl_coef=0.001 \
     trainer.critic_warmup=0 \
-    trainer.logger=['console','wandb'] \
+    trainer.logger=['console'] \
     trainer.project_name=$EXPERIMENT_NAME \
     trainer.experiment_name='length_exp_no_pen' \
     +trainer.val_before_train=False \

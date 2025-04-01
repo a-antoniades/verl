@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 ### FORK and DEBUG with Agent Data
 
 To run the project with debugging enabled and agent data, execute the following command in your terminal:
@@ -174,7 +173,6 @@ Then, make sure you are at top level of verl repo and run
 bash scripts/format.sh
 ```
 We are HIRING! Send us an [email](mailto:haibin.lin@bytedance.com) if you are interested in internship/FTE opportunities in MLSys/LLM reasoning/multimodal alignment.
-=======
 <div align="center" id="sglangtop">
 <img src="https://raw.githubusercontent.com/sgl-project/sglang/main/assets/logo.png" alt="logo" width="400" margin="10px"></img>
 
@@ -250,4 +248,7 @@ For enterprises interested in adopting or deploying SGLang at scale, including t
 
 ## Acknowledgment and Citation
 We learned the design and reused code from the following projects: [Guidance](https://github.com/guidance-ai/guidance), [vLLM](https://github.com/vllm-project/vllm), [LightLLM](https://github.com/ModelTC/lightllm), [FlashInfer](https://github.com/flashinfer-ai/flashinfer), [Outlines](https://github.com/outlines-dev/outlines), and [LMQL](https://github.com/eth-sri/lmql). Please cite the paper, [SGLang: Efficient Execution of Structured Language Model Programs](https://arxiv.org/abs/2312.07104), if you find the project useful.
+<<<<<<< HEAD
+>>>>>>> sglang-fork/feature/http_server_engine
+=======
 >>>>>>> sglang-fork/feature/http_server_engine

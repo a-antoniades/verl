@@ -10,7 +10,7 @@ export BASE_MODEL="/share/edc/home/antonis/weights/huggingface/models--Qwen--Qwe
 export DATA_DIR="/share/edc/home/antonis/swe-gym-setup/verl/data/gsm8k"
 export ROLLOUT_TP_SIZE=1
 export EXPERIMENT_NAME='verl_grpo_length_gsm8k_small'
-export TRAIN_BATCH_SIZE=64  # Reduce this
+export TRAIN_BATCH_SIZE=8  # Reduce this
 export PPO_MINI_BATCH_SIZE=$((TRAIN_BATCH_SIZE / 4))
 export VAL_BATCH_SIZE=$((TRAIN_BATCH_SIZE))  # 1.28x train batch size
 export MAX_TOKEN_LEN_PER_GPU=$((TRAIN_BATCH_SIZE * 24))  # 24x train batch size
@@ -27,7 +27,12 @@ export MAX_TOKEN_LEN_PER_GPU=$((TRAIN_BATCH_SIZE * 24))  # 24x train batch size
 
 export WANDB_MODE=disabled
 
-python3 -m verl.trainer.main_ppo \
+# +actor_rollout_ref.rollout.sglang_args=\"--disable-cuda-graph\" \
+
+# Add to your run script - zero performance impact
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:512
+
+python -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     data.train_files=$DATA_DIR/train.parquet \
     data.val_files=$DATA_DIR/test.parquet \

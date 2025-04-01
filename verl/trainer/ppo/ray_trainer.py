@@ -24,6 +24,7 @@ from enum import Enum
 from pprint import pprint
 from typing import Type, Dict
 from copy import deepcopy
+import logging
 
 import ray
 import numpy as np
@@ -45,6 +46,8 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 
 WorkerType = Type[Worker]
 
+# Add this near the top of the file
+logger = logging.getLogger(__name__)
 
 class Role(Enum):
     """
@@ -1172,8 +1175,8 @@ class RayPPOTrainer(object):
         has_enough_history = len(self.global_history['lengths']) >= window_size
         
         if not has_enough_history:
-            logger.info(f"Not enough global history yet (need {window_size} samples). "
-                       f"Current history size: {len(self.global_history['lengths'])}")
+            print(f"Not enough global history yet (need {window_size} samples). "
+                  f"Current history size: {len(self.global_history['lengths'])}")
             return None, {
                 'length/mean': lengths.float().mean().item(),
                 'length/std': lengths.float().std().item(),

@@ -103,6 +103,20 @@ class SGLangRollout(BaseRollout):
         super().__init__()
         self.config = config
 
+        # Set PyTorch memory management options
+        if hasattr(torch.cuda, 'memory_stats'):
+            print("Setting PyTorch memory optimizations...")
+            # Configure PyTorch memory allocator for better fragmentation handling
+            if not os.environ.get('PYTORCH_CUDA_ALLOC_CONF'):
+                os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True,max_split_size_mb:512'
+                print(f"Set PYTORCH_CUDA_ALLOC_CONF={os.environ['PYTORCH_CUDA_ALLOC_CONF']}")
+        
+        # Reduce memory reservation for better batch scheduling
+        if hasattr(config, 'gpu_memory_utilization'):
+            # Reduce memory utilization by 10% to leave room for peak allocations
+            config.gpu_memory_utilization = min(0.8, config.gpu_memory_utilization * 0.9)
+            print(f"Adjusted gpu_memory_utilization to {config.gpu_memory_utilization}")
+
         assert not (not config.enforce_eager and
                     config.free_cache_engine), "disable CUDA graph (enforce_eager = False) if free cache engine"
 
@@ -193,6 +207,49 @@ class SGLangRollout(BaseRollout):
 
     @torch.no_grad()
     def generate_sequences(self, prompts: DataProto, **kwargs) -> DataProto:
+        # Add memory cleanup before generating
+        if hasattr(torch.cuda, 'empty_cache'):
+            torch.cuda.empty_cache()
+        
+        # Adaptive batch size based on available memory
+        idx = prompts.batch["input_ids"]  # (bs, prompt_length)
+        batch_size = idx.size(0)
+        
+        # Check if we need to process in smaller batches to avoid OOM
+        if batch_size > 16 and hasattr(torch.cuda, 'memory_reserved'):
+            # Calculate available memory
+            device = torch.device('cuda')
+            reserved = torch.cuda.memory_reserved(device) / 1024**3  # GB
+            allocated = torch.cuda.memory_allocated(device) / 1024**3  # GB
+            total = torch.cuda.get_device_properties(device).total_memory / 1024**3  # GB
+            
+            # If memory is tight, process in smaller batches
+            if (total - reserved) < 2.0 or allocated > 0.8 * total:
+                print(f"Memory constrained: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved of {total:.2f}GB total")
+                print(f"Processing in smaller batches to avoid OOM")
+                
+                # Split the batch and process in chunks
+                results = []
+                mini_batch_size = max(1, batch_size // 4)
+                
+                for i in range(0, batch_size, mini_batch_size):
+                    end_idx = min(i + mini_batch_size, batch_size)
+                    mini_prompts = prompts.select(indices=list(range(i, end_idx)))
+                    result = self.generate_sequences_internal(mini_prompts, **kwargs)
+                    results.append(result)
+                    
+                    # Clear cache between batches
+                    torch.cuda.empty_cache()
+                
+                # Combine results
+                combined_result = DataProto.concat(results)
+                return combined_result
+        
+        # If memory is sufficient or we can't check memory, process normally
+        return self.generate_sequences_internal(prompts, **kwargs)
+
+    @torch.no_grad()
+    def generate_sequences_internal(self, prompts: DataProto, **kwargs) -> DataProto:
         # if self.config.free_cache_engine:
 
         idx = prompts.batch["input_ids"]  # (bs, prompt_length)

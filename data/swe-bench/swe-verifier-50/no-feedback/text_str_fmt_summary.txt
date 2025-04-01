@@ -1,0 +1,362 @@
+--- prompt 0, system, django__django-12419 ---
+# Workflow Overview
+
+1. **Understand the Task**
+  * **Review the Task:** Carefully read the task provided in <task>.
+  * **Identify Code to Change:** Analyze the task to determine which parts of the codebase need to be changed.
+  * **Identify Necessary Context:** Determine what additional parts of the codebase are needed to understand how to implement the changes. Consider dependencies, related components, and any code that interacts with the affected areas.
+
+2. **Locate Relevant Code and Tests**
+  * **Search for Code:** Use the search functions to find relevant code if it's not in the current context:
+      * FindClass
+      * FindFunction
+      * FindCodeSnippet
+      * SemanticSearch
+  * **View Code:** Use ViewCode to examine necessary code spans.
+
+3. **Apply Code Changes**
+ * **One Step at a Time:** You can only plan and implement one code change at a time.
+ * **Indentation Requirements:**
+    * Use spaces for indentation, not tabs
+    * Match the exact indentation of the original code
+    * Include enough context to ensure unique matches
+ * **Choose the Appropriate Action:**
+    * Use StringReplace to edit existing files (format: <path>, <old_str>, <new_str>)
+    * Use CreateFile to create new files (format: <path>, <file_text>)
+    * Use AppendString to append a string to the end of a file (format: <path>, <new_str>)
+ * **Tests Run Automatically:** Tests will run automatically after each code change.
+
+4. **Modify or Add Tests**
+ * **Ensure Test Coverage:** After code changes, use the same actions to update or add tests to verify the changes.
+ * **Tests Run Automatically:** Tests will run automatically after test modifications.
+
+5. **Repeat as Necessary**
+  * **Iterate:** If tests fail or further changes are needed, repeat steps 2 to 4.
+
+6. **Finish the Task**
+  * **Completion:** When confident that all changes are correct and the task is resolved, use Finish.
+
+# Important Guidelines
+
+ * **Focus on the Specific Task**
+  - Implement requirements exactly as specified, without additional changes.
+  - Do not modify code unrelated to the task.
+
+ * **Code Context and Changes**
+   - Limit code changes to files in the code you can see.
+   - If you need to examine more code, use ViewCode to see it.
+
+ * **Testing**
+   - Tests run automatically after each code change.
+   - Always update or add tests to verify your changes.
+   - If tests fail, analyze the output and do necessary corrections.
+
+ * **Task Completion**
+   - Finish the task only when the task is fully resolved and verified.
+   - Do not suggest code reviews or additional changes beyond the scope.
+
+ * **State Management**
+   - Keep a detailed record of all code sections you have viewed and actions you have taken.
+   - Before performing a new action, check your history to ensure you are not repeating previous steps.
+   - Use the information you've already gathered to inform your next steps without re-fetching the same data.
+
+ * **One Action at a Time**
+   - You must perform only ONE action before waiting for the result.
+   - Only include one Thought, one Action, and one Action Input per response.
+   - Do not plan multiple steps ahead in a single response.
+
+ * **Wait for the Observation**
+   - After performing an action, wait for the observation (result) before deciding on the next action.
+   - Do not plan subsequent actions until you have received the observation from the current action.
+
+# Additional Notes
+
+ * **Think Step by Step**
+   - Always document your reasoning and thought process in the Thought section.
+   - Build upon previous steps without unnecessary repetition.
+
+ * **Incremental Changes**
+   - Remember to focus on one change at a time and verify each step before proceeding.
+
+ * **Never Guess**
+   - Do not guess line numbers or code content. Use ViewCode to examine code when needed.
+
+
+
+
+# Examples
+Here are some examples of how to use the available actions:
+
+
+**Example 1**
+Task: Find all implementations of database connection pooling in our codebase
+Thought: To find implementations of database connection pooling, we should search for code related to managing database connections efficiently. This might include classes or functions that handle connection creation, reuse, and management.
+Action: SemanticSearch
+{"file_pattern": null, "query": "database connection pooling implementation", "category": "implementation"}
+
+
+**Example 2**
+Task: We need to find all test cases related to user authentication in our test suite
+Thought: To find test cases related to user authentication, we should search for test files that contain assertions and scenarios specifically testing authentication functionality.
+Action: SemanticSearch
+{"file_pattern": "tests/*.py", "query": "user authentication test cases", "category": "test"}
+
+
+**Example 3**
+Task: I need to see the implementation of the DatabaseManager class to understand how it handles transactions
+Thought: To examine how the DatabaseManager class handles transactions, we need to locate its implementation in the codebase.
+Action: FindClass
+{"file_pattern": null, "class_name": "DatabaseManager"}
+
+
+**Example 4**
+Task: Show me the UserAuthentication class in the auth module
+Thought: Looking for the UserAuthentication class specifically in the authentication module.
+Action: FindClass
+{"file_pattern": "auth/*.py", "class_name": "UserAuthentication"}
+
+
+**Example 5**
+Task: Find the calculate_interest function in our financial module to review its logic
+Thought: To review the logic of the calculate_interest function, we need to locate its implementation in the financial module.
+Action: FindFunction
+{"file_pattern": "financial/**/*.py", "function_name": "calculate_interest", "class_name": null}
+
+
+**Example 6**
+Task: Show me the validate_token method in the JWTAuthenticator class
+Thought: Looking for the validate_token method specifically within the JWTAuthenticator class to examine the token validation logic.
+Action: FindFunction
+{"file_pattern": null, "function_name": "validate_token", "class_name": "JWTAuthenticator"}
+
+
+**Example 7**
+Task: I need to understand how the User class is structured in our authentication system. Let me find its definition.
+Thought: To find the User class definition, I'll search for the exact class declaration line 'class User(BaseModel):'
+Action: FindCodeSnippet
+{"file_pattern": null, "code_snippet": "class User(BaseModel):"}
+
+
+**Example 8**
+Task: The system seems to use a default timeout value. I should check where DEFAULT_TIMEOUT is defined in the configuration.
+Thought: To find the timeout configuration, I'll search for the exact variable declaration 'DEFAULT_TIMEOUT =' in config files
+Action: FindCodeSnippet
+{"file_pattern": "**/config/*.py", "code_snippet": "DEFAULT_TIMEOUT ="}
+
+
+**Example 9**
+Task: To understand how request processing works, I need to examine the _handlers dictionary in the processor service.
+Thought: To find the handlers mapping, I'll search for the exact dictionary declaration '_handlers =' in the processor service
+Action: FindCodeSnippet
+{"file_pattern": "services/processor.py", "code_snippet": "_handlers ="}
+
+
+**Example 10**
+Task: I need to see the implementation of the authenticate method in the AuthenticationService class
+Thought: To understand the authentication implementation, we need to examine the authenticate method within the AuthenticationService class.
+Action: ViewCode
+{"files": [{"file_path": "auth/service.py", "start_line": null, "end_line": null, "span_ids": ["AuthenticationService.authenticate"]}]}
+
+
+**Example 11**
+Task: Show me lines 50-75 of the database configuration file
+Thought: To examine the database configuration settings, we'll look at the specified line range in the config file.
+Action: ViewCode
+{"files": [{"file_path": "config/database.py", "start_line": 50, "end_line": 75, "span_ids": []}]}
+
+
+**Example 12**
+Task: Update the error message in the validate_user method
+Thought: Improving the error message to be more descriptive
+Action: StringReplace
+<path>auth/validator.py</path>
+<old_str>
+    if not user.is_active:
+        raise ValueError("Invalid user")
+    return user
+</old_str>
+<new_str>
+    if not user.is_active:
+        raise ValueError(f"Invalid user: {username} does not meet the required criteria")
+    return user
+</new_str>
+
+**Example 13**
+Task: Update the user validation logic
+Thought: Adding email validation and password strength check
+Action: StringReplace
+<path>auth/validator.py</path>
+<old_str>
+def validate_user(username, password):
+    if len(username) < 3:
+        return False
+    if len(password) < 8:
+        return False
+    return True
+</old_str>
+<new_str>
+def validate_user(username, password):
+    if len(username) < 3 or not is_valid_email(username):
+        return False
+    if len(password) < 12 or not has_special_chars(password):
+        return False
+    if not has_numbers(password):
+        return False
+    return True
+</new_str>
+
+**Example 14**
+Task: Add a new helper function to validate passwords
+Thought: Adding a new function to check password complexity
+Action: StringReplace
+<path>auth/validator.py</path>
+<old_str>
+def validate_user(username, password):
+    if len(username) < 3 or not is_valid_email(username):
+        return False
+    if len(password) < 12 or not has_special_chars(password):
+        return False
+    if not has_numbers(password):
+        return False
+    return True
+</old_str>
+<new_str>
+def is_password_complex(password: str) -> bool:
+    has_uppercase = any(c.isupper() for c in password)
+    has_lowercase = any(c.islower() for c in password)
+    has_digit = any(c.isdigit() for c in password)
+    has_special = any(not c.isalnum() for c in password)
+    return all([has_uppercase, has_lowercase, has_digit, has_special])
+
+def validate_user(username, password):
+    if len(username) < 3 or not is_valid_email(username):
+        return False
+    if len(password) < 12 or not has_special_chars(password):
+        return False
+    if not has_numbers(password) or not is_password_complex(password):
+        return False
+    return True
+</new_str>
+
+**Example 15**
+Task: Remove the deprecated logging configuration
+Thought: Removing old logging setup that's no longer needed
+Action: StringReplace
+<path>utils/logger.py</path>
+<old_str>
+    # Legacy logging configuration
+    if legacy_mode:
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format="[%(levelname)s] %(message)s",
+            filename="legacy.log"
+        )
+        logger.warning("Using deprecated legacy logging configuration")
+</old_str>
+<new_str>
+
+</new_str>
+
+**Example 16**
+Task: Create a new Python file for handling user authentication
+Thought: Creating a new authentication module with basic user authentication functionality
+Action: CreateFile
+<path>auth/user_auth.py</path>
+<file_text>
+import logging
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+class UserAuth:
+    def __init__(self):
+        self._users = {}
+
+    def authenticate(self, username: str, password: str) -> bool:
+        if username not in self._users:
+            logger.warning(f"Authentication failed: User {username} not found")
+            return False
+
+        return self._users[username] == password
+
+    def register(self, username: str, password: str) -> bool:
+        if username in self._users:
+            logger.error(f"Registration failed: User {username} already exists")
+            return False
+
+        self._users[username] = password
+        logger.info(f"User {username} registered successfully")
+        return True
+</file_text>
+
+# Response format
+
+Use the following format:
+
+Thought: You should always think about what to do
+Action: The action to take followed by the input arguments based on the schema below
+
+Use one of the following actions and provide input arguments matching the schema.
+
+ * SemanticSearch Requires a JSON response with the following schema: {"description": "Use this when you don't know exact names or code but want to find related functionality.\n\nPerfect for:\n- Finding functionality by description: query=\"code that handles password hashing\"\n- Finding related test cases: query=\"tests for user registration\", category=\"test\"\n- Finding implementations: query=\"database connection pooling\", category=\"implementation\"\n- Finding patterns: query=\"error handling for API requests\"\n\nThis is the most flexible search when you:\n- Don't know exact function/class names\n- Want to find similar implementations\n- Need to discover related code\n- Want to explore how certain features are implemented", "properties": {"thoughts": {"description": "Your reasoning for the action.", "title": "Thoughts", "type": "string"}, "file_pattern": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "description": "A glob pattern to filter search results to specific files or directories.", "title": "File Pattern"}, "query": {"description": "Natural language description of what you're looking for.", "title": "Query", "type": "string"}, "category": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "description": "The category of files to search for. This can be 'implementation' for core implementation files or 'test' for test files.", "title": "Category"}}, "required": ["thoughts", "query"], "title": "SemanticSearch", "type": "object"}
+
+ * FindClass Requires a JSON response with the following schema: {"description": "Use this when you know the exact name of a class you want to find.\n\nPerfect for:\n- Finding class implementations: class_name=\"UserRepository\"\n- Locating test classes: class_name=\"TestUserAuthentication\"\n- Finding base classes: class_name=\"BaseController\"\n- Finding classes in specific modules: class_name=\"Config\", file_pattern=\"src/config/*.py\"", "properties": {"thoughts": {"description": "Your reasoning for the action.", "title": "Thoughts", "type": "string"}, "file_pattern": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "description": "A glob pattern to filter search results to specific files or directories.", "title": "File Pattern"}, "class_name": {"description": "Specific class name to include in the search.", "title": "Class Name", "type": "string"}}, "required": ["thoughts", "class_name"], "title": "FindClass", "type": "object"}
+
+ * FindFunction Requires a JSON response with the following schema: {"description": "Use this when you know the exact name of a function or method you want to find.\n\nPerfect for:\n- Finding test cases: function_name=\"test_user_login\"\n- Locating specific implementations: function_name=\"process_payment\"\n- Finding all methods with a name: function_name=\"validate\"\n- Finding a specific class method: function_name=\"save\", class_name=\"UserRepository\"", "properties": {"thoughts": {"description": "Your reasoning for the action.", "title": "Thoughts", "type": "string"}, "file_pattern": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "description": "A glob pattern to filter search results to specific files or directories.", "title": "File Pattern"}, "function_name": {"description": "The exact name of the function or method you want to find. Must match the function definition in code.", "title": "Function Name", "type": "string"}, "class_name": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "description": "Optional class name if searching for a specific class method. Leave empty for standalone functions.", "title": "Class Name"}}, "required": ["thoughts", "function_name"], "title": "FindFunction", "type": "object"}
+
+ * FindCodeSnippet Requires a JSON response with the following schema: {"description": "Use this when you know the exact code you want to find.\n     It will run the command: grep -n -r \"code_snippet\" \"file_pattern\"\n\nPerfect for:\n- Finding specific constant definitions: code_snippet=\"MAX_RETRIES = 3\"\n- Finding decorator usage: code_snippet=\"@retry(max_attempts=3)\"\n- Finding specific imports: code_snippet=\"from datetime import datetime\"\n- Finding configuration patterns: code_snippet=\"DEBUG = os.getenv('DEBUG', False)\"\n\nNote: You must know the exact code snippet. Use SemanticSearch if you only know\nwhat the code does but not its exact implementation.", "properties": {"thoughts": {"description": "Your reasoning for the action.", "title": "Thoughts", "type": "string"}, "file_pattern": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "description": "A glob pattern to filter search results to specific file types or directories. ", "title": "File Pattern"}, "code_snippet": {"description": "The exact code snippet to find.", "title": "Code Snippet", "type": "string"}}, "required": ["thoughts", "code_snippet"], "title": "FindCodeSnippet", "type": "object"}
+
+ * ViewCode Requires a JSON response with the following schema: {"$defs": {"CodeSpan": {"properties": {"file_path": {"description": "The file path where the relevant code is found.", "title": "File Path", "type": "string"}, "start_line": {"anyOf": [{"type": "integer"}, {"type": "null"}], "default": null, "description": "The start line of the code to add to context.", "title": "Start Line"}, "end_line": {"anyOf": [{"type": "integer"}, {"type": "null"}], "default": null, "description": "The end line of the code to add to context.", "title": "End Line"}, "span_ids": {"description": "Span IDs identiying the relevant code spans. A span id is a unique identifier for a code sippet. It can be a class name or function name. For functions in classes separete with a dot like 'class.function'.", "items": {"type": "string"}, "title": "Span Ids", "type": "array"}}, "required": ["file_path"], "title": "CodeSpan", "type": "object"}}, "description": "View the code in a file or a specific code span.", "properties": {"thoughts": {"description": "Your thoughts on the code change.", "title": "Thoughts", "type": "string"}, "files": {"description": "The code that should be provided in the file context.", "items": {"$ref": "#/$defs/CodeSpan"}, "title": "Files", "type": "array"}}, "required": ["thoughts", "files"], "title": "ViewCode", "type": "object"}
+
+ * StringReplace Requires the following XML format:
+<path>file/path.py</path>
+<old_str>
+exact code to replace
+</old_str>
+<new_str>
+replacement code
+</new_str>
+
+ * CreateFile Requires the following XML format:
+<path>file/path.py</path>
+<file_text>
+complete file content
+</file_text>
+
+ * AppendString Requires the following XML format:
+<path>file/path.py</path>
+<new_str>
+content to append at end of file
+</new_str>
+
+ * RunTests Requires a JSON response with the following schema: {"description": "Run the specified unit tests on the codebase.", "properties": {"thoughts": {"description": "Your reasoning on what tests to run.", "title": "Thoughts", "type": "string"}, "test_files": {"description": "The list of test files to run", "items": {"type": "string"}, "title": "Test Files", "type": "array"}}, "required": ["thoughts", "test_files"], "title": "RunTests", "type": "object"}
+
+ * Finish Requires a JSON response with the following schema: {"description": "Indicate that the task is fully completed.", "properties": {"thoughts": {"description": "Your reasoning about why the task is complete.", "title": "Thoughts", "type": "string"}, "finish_reason": {"description": "Explanation of completion.", "title": "Finish Reason", "type": "string"}}, "required": ["thoughts", "finish_reason"], "title": "Finish", "type": "object"}
+
+ * Reject Requires a JSON response with the following schema: {"description": "Reject the task and explain why.", "properties": {"thoughts": {"description": "Your reasoning for the action.", "title": "Thoughts", "type": "string"}, "rejection_reason": {"description": "Explanation for rejection.", "title": "Rejection Reason", "type": "string"}}, "required": ["thoughts", "rejection_reason"], "title": "Reject", "type": "object"}
+
+Important: Do not include multiple Thought-Action blocks. Do not include code blocks or additional text outside of this format.
+
+
+--- prompt 1, user, django__django-12419 ---<task>
+Solve the following reported issue in the django/django repository:
+
+Add secure default SECURE_REFERRER_POLICY / Referrer-policy header
+Description
+	
+#29406 added the ability for the SECURE_REFERRER_POLICY setting to set Referrer-Policy, released in Django 3.0.
+I propose we change the default for this to "same-origin" to make Django applications leak less information to third party sites.
+The main risk of breakage here would be linked websites breaking, if they depend on verification through the Referer header. This is a pretty fragile technique since it can be spoofed.
+Documentation: ​https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Referrer-Policy
+The MDN support grid is out of date: ​https://caniuse.com/#search=Referrer-Policy
+
+</task>
+
+--- prompt 2, assistant, django__django-12419 ---Thought: To address the task, we need to locate the default settings for the `SECURE_REFERRER_POLICY` in the Django codebase and modify it to "same-origin". We should also ensure that we update the documentation to reflect this change.
+Action: SemanticSearch
+{
+  "file_pattern": "django/conf/*.py",
+  "query": "default SECURE_REFERRER_POLICY",
+  "category": "implementation"
+}
+

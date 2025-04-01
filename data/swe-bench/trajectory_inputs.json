@@ -1,0 +1,125 @@
+{
+  "node_1_step_0": [
+    {
+      "role": "system",
+      "content": "You are an autonomous AI assistant tasked with identifying relevant..."
+    },
+    {
+      "role": "user",
+      "content": "Search request: Action: FindClass file_pattern: None class_name: HttpResponse Identify the..."
+    },
+    {
+      "role": "assistant",
+      "content": "{ \"thoughts\": \"The search request is to find the class...",
+      "logprobs": {
+        "content": [
+          {
+            "token": "{\n",
+            "bytes": [
+              123,
+              10
+            ],
+            "logprob": -0.8982515931129456,
+            "top_logprobs": []
+          },
+          {
+            "token": " ",
+            "bytes": [
+              32
+            ],
+            "logprob": -0.012534411624073982,
+            "top_logprobs": []
+          },
+          {
+            "token": " \"",
+            "bytes": [
+              32,
+              34
+            ],
+            "logprob": -4.327203714638017e-05,
+            "top_logprobs": []
+          },
+          {
+            "token": "thought",
+            "bytes": [
+              116,
+              104,
+              111,
+              117,
+              103,
+              104,
+              116
+            ],
+            "logprob": -7.152555099310121e-07,
+            "top_logprobs": []
+          },
+          {
+            "token": "s",
+            "bytes": [
+              115
+            ],
+            "logprob": 0.0,
+            "top_logprobs": []
+          },
+          {
+            "token": "\":",
+            "bytes": [
+              34,
+              58
+            ],
+            "logprob": 0.0,
+            "top_logprobs": []
+          },
+          {
+            "token": " \"",
+            "bytes": [
+              32,
+              34
+            ],
+            "logprob": -2.3841855067985307e-07,
+            "top_logprobs": []
+          },
+          {
+            "token": "The",
+            "bytes": [
+              84,
+              104,
+              101
+            ],
+            "logprob": -4.339123915997334e-05,
+            "top_logprobs": []
+          },
+          {
+            "token": " search",
+            "bytes": [
+              32,
+              115,
+              101,
+              97,
+              114,
+              99,
+              104
+            ],
+            "logprob": -0.006667983252555132,
+            "top_logprobs": []
+          },
+          {
+            "token": " request",
+            "bytes": [
+              32,
+              114,
+              101,
+              113,
+              117,
+              101,
+              115,
+              116
+            ],
+            "logprob": -0.0019683525897562504,
+            "top_logprobs": []
+          }
+        ]
+      }
+    }
+  ]
+}

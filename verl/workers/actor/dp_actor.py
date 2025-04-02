@@ -308,7 +308,7 @@ class DataParallelPPOActor(BasePPOActor):
                         metrics['actor/kl_coef'] = self.config.kl_loss_coef
 
                     # Apply length penalty if configured
-                    if self.config.use_length_penalty and 'length_penalties' in data:
+                    if getattr(self.config, 'use_length_penalty', False) and 'length_penalties' in data:
                         length_penalties = data['length_penalties']
                         length_loss = masked_mean(length_penalties, response_mask)
                         policy_loss = policy_loss + length_loss * self.config.length_penalty_coef

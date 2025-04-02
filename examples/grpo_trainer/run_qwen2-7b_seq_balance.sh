@@ -71,7 +71,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.save_freq=-1 \
     trainer.test_freq=5 \
     trainer.total_epochs=1000 \
-    +actor_rollout_ref.actor.gradient_accumulation_steps=4 \
+    actor_rollout_ref.model.enable_gradient_checkpointing=True
     +actor_rollout_ref.actor.use_length_penalty=false \
     +actor_rollout_ref.actor.length_window_size=250 \
     +actor_rollout_ref.actor.length_penalty_coef=0.1 \

@@ -43,6 +43,9 @@ from verl.utils.tracking import ValidationGenerationsLogger
 from torch.utils.data import RandomSampler, SequentialSampler
 from torchdata.stateful_dataloader import StatefulDataLoader
 
+import logging
+logger = logging.getLogger(__name__)
+
 WorkerType = Type[Worker]
 
 

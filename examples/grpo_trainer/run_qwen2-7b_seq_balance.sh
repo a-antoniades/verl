@@ -10,7 +10,7 @@ export BASE_MODEL="/share/edc/home/antonis/weights/huggingface/models--Qwen--Qwe
 export DATA_DIR="/share/edc/home/antonis/swe-gym-setup/verl/data/gsm8k"
 export ROLLOUT_TP_SIZE=1
 export EXPERIMENT_NAME='verl_grpo_length_gsm8k_small'
-export TRAIN_BATCH_SIZE=64  # Reduce this
+export TRAIN_BATCH_SIZE=32  # Reduce this
 export PPO_MINI_BATCH_SIZE=$((TRAIN_BATCH_SIZE / 4))
 export VAL_BATCH_SIZE=$((TRAIN_BATCH_SIZE))  # 1.28x train batch size
 export MAX_TOKEN_LEN_PER_GPU=$((TRAIN_BATCH_SIZE * 24))  # 24x train batch size
@@ -27,6 +27,12 @@ export MAX_TOKEN_LEN_PER_GPU=$((TRAIN_BATCH_SIZE * 24))  # 24x train batch size
 
 export WANDB_MODE=disabled
 
+# HTTP server configuration
+# Set to "true" to enable HTTP server mode
+export USE_HTTP_SERVER="true"
+# Optional: specify a port (if not set, an available port will be found automatically)
+export SERVER_PORT=32168
+
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     data.train_files=$DATA_DIR/train.parquet \
@@ -34,7 +40,7 @@ python3 -m verl.trainer.main_ppo \
     data.train_batch_size=$TRAIN_BATCH_SIZE \
     data.val_batch_size=$VAL_BATCH_SIZE \
     data.max_prompt_length=512 \
-    data.max_response_length=1024 \
+    data.max_response_length=512 \
     actor_rollout_ref.model.path=$BASE_MODEL \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=True \
@@ -45,12 +51,14 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.kl_loss_coef=0.001 \
     actor_rollout_ref.actor.kl_loss_type=low_var_kl \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
-    actor_rollout_ref.actor.fsdp_config.param_offload=False \
-    actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
+    actor_rollout_ref.actor.fsdp_config.param_offload=True \
+    actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
     actor_rollout_ref.rollout.tensor_model_parallel_size=$ROLLOUT_TP_SIZE \
     actor_rollout_ref.rollout.name="sglang" \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
-    actor_rollout_ref.rollout.n=5 \
+    actor_rollout_ref.rollout.n=3 \
+    +actor_rollout_ref.rollout.use_http_server=$USE_HTTP_SERVER \
+    +actor_rollout_ref.rollout.server_port=$SERVER_PORT \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     algorithm.kl_ctrl.kl_coef=0.001 \
     trainer.critic_warmup=0 \
@@ -63,6 +71,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.save_freq=-1 \
     trainer.test_freq=5 \
     trainer.total_epochs=1000 \
+    +actor_rollout_ref.actor.gradient_accumulation_steps=4 \
     +actor_rollout_ref.actor.use_length_penalty=false \
     +actor_rollout_ref.actor.length_window_size=250 \
     +actor_rollout_ref.actor.length_penalty_coef=0.1 \

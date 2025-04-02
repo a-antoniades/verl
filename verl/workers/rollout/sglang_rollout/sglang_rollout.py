@@ -27,19 +27,25 @@
 
 from __future__ import annotations
 import os
+import requests
+import socket
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, List, Optional
 from omegaconf import DictConfig
 from tensordict import TensorDict
 from verl import DataProto
 from verl.workers.rollout.base import BaseRollout
 from verl.utils.torch_functional import get_eos_mask, pad_sequence_to_length, pad_2d_list_to_length
 from sglang.srt.entrypoints.verl_engine import VerlEngine
+from sglang.srt.server_args import ServerArgs
 from torch.distributed.device_mesh import init_device_mesh
 from sglang.srt.sampling.sampling_params import SamplingParams
 from verl.third_party.sglang import parallel_state as sglang_ps
 import torch.distributed
 from torch.nn.utils.rnn import pad_sequence
+import json
+import random
+import time
 
 if TYPE_CHECKING:
     from torch import nn
@@ -79,6 +85,20 @@ def _post_process_outputs(tokenizer, output):
     if len(batched_logprobs) > 0:
         batched_logprobs = pad_sequence(batched_logprobs, batch_first=True, padding_value=pad_token_id)
     return batched_output_token_ids, batched_logprobs
+
+
+def find_available_port(base_port: int):
+    """Find an available port starting from base_port."""
+    port = base_port + random.randint(100, 1000)
+    while True:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(('', port))
+                return port
+        except OSError:
+            port += 1
+            if port > 65535:
+                port = base_port
 
 
 class SGLangRollout(BaseRollout):
@@ -141,24 +161,102 @@ class SGLangRollout(BaseRollout):
                                             device_mesh_cpu.get_group("tp"))
         os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(visible_devices)
 
-        self.inference_engine = VerlEngine(
-            model_path=actor_module,
-            dtype=config.dtype,
-            mem_fraction_static=config.gpu_memory_utilization,
-            device_mesh_cpu=device_mesh_cpu["tp"],
-            base_gpu_id=0,
-            gpu_id_step=1,
-            # NOTE(Chenyang): if you want to debug the sglang engine
-            # please set the following parameters
-            # Otherwise, it will make the engine run too slow
-            log_level="INFO",
-            log_requests=True,
-            log_requests_level=2,
-            max_running_requests=1,
-        )
+        # Check if HTTP server mode is enabled
+        self.use_http_server = config.get("use_http_server", False)
+        self.server_port = config.get("server_port", None)
+        self.server_host = config.get("server_host", "localhost")
+        print(f"self.use_http_server: {self.use_http_server}")
+        print(f"self.server_port: {self.server_port}")
+        print(f"self.server_host: {self.server_host}")
+        
+        # Initialize based on mode (in-process or HTTP server)
+        if self.use_http_server:
+            try:
+                # Get worker rank for unique port assignment
+                worker_rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+                
+                # If server_port is None, find an available port
+                if self.server_port is None:
+                    self.server_port = find_available_port(32000 + worker_rank * 100)
+                else:
+                    # Add worker rank offset to ensure unique ports across workers
+                    self.server_port = self.server_port + worker_rank
+                
+                # Initialize the engine with HTTP server
+                print(f"Worker {worker_rank}: Attempting to start SGLang HTTP server on port {self.server_port}")
+                self.inference_engine = VerlEngine(
+                    model_path=actor_module,
+                    dtype=config.dtype,
+                    mem_fraction_static=config.gpu_memory_utilization,
+                    device_mesh_cpu=device_mesh_cpu["tp"],
+                    base_gpu_id=0,
+                    gpu_id_step=1,
+                    log_level="INFO",
+                    log_requests=True,
+                    log_requests_level=2,
+                    max_running_requests=1,
+                    launch_server=True,  # Enable HTTP server
+                    server_args=ServerArgs(
+                        model_path=actor_module,
+                        tp_size=tp_size,
+                        port=self.server_port,
+                        mem_fraction_static=config.gpu_memory_utilization,
+                    ),
+                )
+                self.server_url = f"http://{self.server_host}:{self.server_port}/generate"
+                print(f"Worker {worker_rank}: SGLang HTTP server started at {self.server_url}")
+                
+                # IMPORTANT: Check if server is responding
+                max_retries = 5
+                for retry in range(max_retries):
+                    try:
+                        health_url = f"http://{self.server_host}:{self.server_port}/health_generate"
+                        response = requests.get(health_url, timeout=5)
+                        if response.status_code == 200:
+                            print(f"Worker {worker_rank}: Successfully connected to SGLang server")
+                            break
+                    except Exception as e:
+                        print(f"Worker {worker_rank}: Server health check failed (attempt {retry+1}/{max_retries}): {e}")
+                        time.sleep(1)
+                    
+                    if retry == max_retries - 1:
+                        raise Exception(f"Failed to connect to SGLang server after {max_retries} attempts")
+                
+            except Exception as e:
+                print(f"Failed to start SGLang HTTP server: {e}")
+                print("Falling back to in-process engine")
+                self.use_http_server = False
+                # Fall back to in-process engine
+                self.inference_engine = VerlEngine(
+                    model_path=actor_module,
+                    dtype=config.dtype,
+                    mem_fraction_static=config.gpu_memory_utilization,
+                    device_mesh_cpu=device_mesh_cpu["tp"],
+                    base_gpu_id=0,
+                    gpu_id_step=1,
+                    log_level="INFO",
+                    log_requests=True,
+                    log_requests_level=2,
+                    max_running_requests=1,
+                )
+        else:
+            # Original in-process engine initialization
+            self.inference_engine = VerlEngine(
+                model_path=actor_module,
+                dtype=config.dtype,
+                mem_fraction_static=config.gpu_memory_utilization,
+                device_mesh_cpu=device_mesh_cpu["tp"],
+                base_gpu_id=0,
+                gpu_id_step=1,
+                log_level="INFO",
+                log_requests=True,
+                log_requests_level=2,
+                max_running_requests=1,
+            )
 
-        # offload
-        self.inference_engine.release_memory_occupation()
+        # offload (skip for HTTP server mode as it causes CUDA errors)
+        if not self.use_http_server:
+            self.inference_engine.release_memory_occupation()
 
         kwargs = dict(n=1,
                       max_new_tokens=config.response_length,
@@ -169,7 +267,7 @@ class SGLangRollout(BaseRollout):
         for k in config.keys():
             if hasattr(SamplingParams(), str(k)):
                 kwargs[k] = config.get(k)
-        print(f"kwargs: {kwargs}")
+
         self.sampling_params = kwargs
 
         self.tokenizer = tokenizer
@@ -191,14 +289,109 @@ class SGLangRollout(BaseRollout):
         for key, value in old_sampling_params_args.items():
             self.sampling_params[key] = value
 
+    def _post_process_server_outputs(self, tokenizer, outputs, batch_size, n=1):
+        """Process outputs from the SGLang HTTP server into the expected format."""
+        try:
+            print(f"Server output format: {outputs}")
+            print(f"Expected batch size: {batch_size}, n={n}")
+            
+            # Convert server response to the expected format
+            batched_output_token_ids = []
+            batched_logprobs = []
+            
+            # For each prompt in the batch
+            for i in range(len(outputs)):
+                response_data = outputs[i]
+                
+                # The response should have 'n' completions
+                if isinstance(response_data, list):
+                    # Server returned a list of completions
+                    responses = response_data
+                elif isinstance(response_data, dict) and 'text' in response_data:
+                    # Server returned a single completion
+                    responses = [response_data]
+                else:
+                    print(f"Unexpected server response format: {response_data}")
+                    # Create empty tensors for this sample
+                    empty_ids = torch.tensor([tokenizer.eos_token_id])
+                    empty_probs = torch.tensor([0.0])
+                    for _ in range(n):
+                        batched_output_token_ids.append(empty_ids)
+                        batched_logprobs.append(empty_probs)
+                    continue
+                
+                # Process each of the 'n' completions for this prompt
+                for j in range(len(responses)):
+                    response = responses[j]
+                    if 'text' in response:
+                        # Extract just the assistant's response (not including prompt)
+                        output_text = response.get('text', '')
+                        try:
+                            # Use Hugging Face tokenizer to convert text to tokens
+                            output_token_ids = tokenizer.encode(output_text, add_special_tokens=False)
+                            output_token_ids = torch.tensor(output_token_ids)
+                            
+                            # Create dummy logprobs since the server might not return them
+                            log_probs = torch.zeros(len(output_token_ids))
+                            
+                            batched_output_token_ids.append(output_token_ids)
+                            batched_logprobs.append(log_probs)
+                        except Exception as e:
+                            print(f"Error tokenizing response: {e}")
+                            batched_output_token_ids.append(torch.tensor([tokenizer.eos_token_id]))
+                            batched_logprobs.append(torch.tensor([0.0]))
+                    elif 'token_ids' in response:
+                        # If the server returns token IDs directly
+                        output_token_ids = torch.tensor(response['token_ids'])
+                        # Create dummy logprobs if not provided
+                        log_probs = torch.zeros(len(output_token_ids))
+                        if 'logprobs' in response:
+                            log_probs = torch.tensor(response['logprobs'])
+                        
+                        batched_output_token_ids.append(output_token_ids)
+                        batched_logprobs.append(log_probs)
+                    else:
+                        print(f"Unexpected completion format: {response}")
+                        batched_output_token_ids.append(torch.tensor([tokenizer.eos_token_id]))
+                        batched_logprobs.append(torch.tensor([0.0]))
+                
+                # Make sure we have exactly n completions for this prompt
+                while len(batched_output_token_ids) < (i+1) * n:
+                    batched_output_token_ids.append(torch.tensor([tokenizer.eos_token_id]))
+                    batched_logprobs.append(torch.tensor([0.0]))
+            
+            # Ensure we have the right total number of samples (batch_size * n)
+            expected_samples = batch_size * n
+            while len(batched_output_token_ids) < expected_samples:
+                batched_output_token_ids.append(torch.tensor([tokenizer.eos_token_id]))
+                batched_logprobs.append(torch.tensor([0.0]))
+            
+            # Print the number of samples we have
+            print(f"Number of processed samples: {len(batched_output_token_ids)}")
+            
+            # Pad sequences to the same length
+            pad_token_id = (tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id)
+            batched_output_token_ids = pad_sequence(batched_output_token_ids, batch_first=True, padding_value=pad_token_id)
+            if len(batched_logprobs) > 0:
+                batched_logprobs = pad_sequence(batched_logprobs, batch_first=True, padding_value=0.0)
+            
+            print(f"Final tensor shape: {batched_output_token_ids.shape}")
+            return batched_output_token_ids, batched_logprobs
+        except Exception as e:
+            print(f"Error processing server outputs: {e}")
+            # Return empty tensors with the right batch dimension
+            return torch.full((batch_size * n, 1), tokenizer.eos_token_id), torch.zeros((batch_size * n, 1))
+
     @torch.no_grad()
     def generate_sequences(self, prompts: DataProto, **kwargs) -> DataProto:
-        # if self.config.free_cache_engine:
-
+        # Get original batch parameters
         idx = prompts.batch["input_ids"]  # (bs, prompt_length)
-        # left-padded attention_mask
         attention_mask = prompts.batch["attention_mask"]
         position_ids = prompts.batch["position_ids"]
+
+        # Record the original batch size - we need to maintain this exact size
+        original_batch_size = idx.size(0)
+        print(f"Original batch size: {original_batch_size}")
 
         # used to construct attention_mask
         eos_token_id = prompts.meta_info["eos_token_id"]
@@ -211,13 +404,6 @@ class SGLangRollout(BaseRollout):
 
         do_sample = prompts.meta_info.get("do_sample", True)
         if not do_sample:
-            # kwargs = {
-            #     'top_p': 1.0,
-            #     'top_k': -1,
-            #     'min_p': 0.0,
-            #     'temperature': 0,
-            #     'n': 1  # if greedy, only 1 response
-            # }
             kwargs = dict(
                 n=1,
                 presence_penalty=0.0,
@@ -232,29 +418,199 @@ class SGLangRollout(BaseRollout):
                 skip_special_tokens=True,
                 spaces_between_special_tokens=True,
             )
+        
+        # Memory management: Check current CUDA memory usage
+        if torch.cuda.is_available():
+            try:
+                free_memory = torch.cuda.mem_get_info()[0] / (1024 ** 3)  # Free memory in GB
+                total_memory = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)  # Total memory in GB
+                print(f"CUDA Memory: {free_memory:.2f}GB free / {total_memory:.2f}GB total")
+                
+                # Adjust batch size or n based on available memory if needed
+                n_samples = self.sampling_params.get("n", 1)
+                if free_memory < 10 and n_samples > 2:  # Less than 10GB free and using multiple samples
+                    old_n = n_samples
+                    n_samples = max(1, min(n_samples, int(free_memory / 2)))  # Reduce n based on available memory
+                    print(f"Memory low, reducing samples from {old_n} to {n_samples}")
+                    kwargs["n"] = n_samples  # Update n in kwargs to pass to sampling params
+            except Exception as e:
+                print(f"Error checking CUDA memory: {e}")
+            
         # users can customize different sampling_params at different run
         with self.update_sampling_params(**kwargs):
             print(f"{self.sampling_params=}")
-            output = self.inference_engine.generate(
-                prompt=None,  # because we have already convert it to prompt token id
-                sampling_params=self.sampling_params,
-                return_logprob=True,
-                input_ids=idx_list,
-            )
-
-        out = _post_process_outputs(self.tokenizer, output)
+            n_samples = self.sampling_params.get("n", 1)
+            print(f"Using n={n_samples} samples")
+            
+            # Limit max_new_tokens to prevent OOM
+            max_new_tokens = min(self.sampling_params.get("max_new_tokens", 4096), self.config.response_length)
+            if "max_new_tokens" in self.sampling_params and self.sampling_params["max_new_tokens"] > max_new_tokens:
+                print(f"Limiting max_new_tokens from {self.sampling_params['max_new_tokens']} to {max_new_tokens}")
+                self.sampling_params["max_new_tokens"] = max_new_tokens
+            
+            if self.use_http_server:
+                # Use HTTP server for generation
+                all_outputs = []
+                
+                # First check if server is still responsive
+                try:
+                    # Try checking the server with a simple request to /generate
+                    health_url = f"http://{self.server_host}:{self.server_port}/generate"
+                    health_data = {"text": "test", "max_tokens": 1}
+                    health_response = requests.post(health_url, json=health_data, timeout=5)
+                    if health_response.status_code != 200:
+                        print(f"Server health check failed: {health_response.status_code}")
+                        raise Exception(f"Server returned status code {health_response.status_code}")
+                    print(f"Server health check OK")
+                except Exception as e:
+                    print(f"Server health check failed, falling back to in-process mode: {e}")
+                    self.use_http_server = False
+                    # Fall back to in-process generation
+                    output = self.inference_engine.generate(
+                        prompt=None,
+                        sampling_params=self.sampling_params,
+                        return_logprob=True,
+                        input_ids=idx_list,
+                    )
+                    out = _post_process_outputs(self.tokenizer, output)
+                else:
+                    # Process in smaller batches to avoid OOM
+                    max_batch_size = 8 // n_samples  # Adjust based on number of samples
+                    max_batch_size = max(1, max_batch_size)  # At least 1
+                    
+                    for batch_start in range(0, len(idx_list), max_batch_size):
+                        batch_end = min(batch_start + max_batch_size, len(idx_list))
+                        batch_idx_list = idx_list[batch_start:batch_end]
+                        print(f"Processing HTTP batch {batch_start}:{batch_end} of {len(idx_list)}")
+                        
+                        batch_outputs = []
+                        for prompt_tokens in batch_idx_list:
+                            # Format request for HTTP server
+                            try:
+                                # Convert token IDs back to text if possible
+                                decoded_text = self.tokenizer.decode(prompt_tokens)
+                                # Use the server's expected format
+                                request_data = {
+                                    "text": decoded_text,
+                                    "max_tokens": min(self.sampling_params.get("max_new_tokens", 1024), self.config.response_length),
+                                    "temperature": self.sampling_params.get("temperature", 1.0),
+                                    "top_p": self.sampling_params.get("top_p", 1.0),
+                                    "top_k": self.sampling_params.get("top_k", -1),
+                                    "n": n_samples  # Important: use the same n as the sampling params
+                                }
+                                
+                                # Send request to server
+                                print(f"Sending request to {self.server_url}")
+                                response = requests.post(self.server_url, json=request_data, timeout=120)  # Longer timeout
+                                response.raise_for_status()  # Raise exception for HTTP errors
+                                response_data = response.json()
+                                
+                                # Process server response
+                                print(f"Received response from server")
+                                batch_outputs.append(response_data)
+                            except Exception as e:
+                                print(f"Error in HTTP request: {e}")
+                                # Fall back to in-process generation for this sample
+                                print("Falling back to in-process generation for this prompt")
+                                in_process_output = self.inference_engine.generate(
+                                    prompt=None,
+                                    sampling_params=self.sampling_params,
+                                    return_logprob=True,
+                                    input_ids=[prompt_tokens],
+                                )
+                                # Add this output to our batch
+                                batch_outputs.append(in_process_output[0])
+                        
+                        all_outputs.extend(batch_outputs)
+                        
+                        # Free up memory after each batch
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                    
+                    # Only process server outputs if we didn't fall back to in-process mode
+                    if self.use_http_server:
+                        # Post-process outputs from HTTP server
+                        print(f"Processing server responses")
+                        out = self._post_process_server_outputs(
+                            self.tokenizer, 
+                            all_outputs, 
+                            batch_size=batch_size,
+                            n=n_samples
+                        )
+            else:
+                # Use in-process engine for generation
+                output = self.inference_engine.generate(
+                    prompt=None,  # because we have already convert it to prompt token id
+                    sampling_params=self.sampling_params,
+                    return_logprob=True,
+                    input_ids=idx_list,
+                )
+                out = _post_process_outputs(self.tokenizer, output)
 
         response = out[0].to(idx.device)
         log_probs = out[1].to(idx.device)
 
+        print(f"Response tensor shape: {response.shape}")
+        print(f"IDX tensor shape: {idx.shape}")
+
+        # Ensure we don't exceed the configured response length
+        if response.shape[1] > self.config.response_length:
+            print(f"Truncating response from {response.shape[1]} to {self.config.response_length}")
+            response = response[:, :self.config.response_length]
+            log_probs = log_probs[:, :self.config.response_length] if log_probs.shape[1] > self.config.response_length else log_probs
+        
+        # Pad if needed
         if response.shape[1] < self.config.response_length:
             response = pad_sequence_to_length(response, self.config.response_length, self.pad_token_id)
             log_probs = pad_sequence_to_length(log_probs, self.config.response_length, self.pad_token_id)
+
+        # CRITICAL: The final batch size must match the original batch size
+        # When using n>1, we need to ensure we return exactly original_batch_size * n samples
+        target_batch_size = original_batch_size
         if self.config.n > 1 and do_sample:
-            idx = idx.repeat_interleave(self.config.n, dim=0)
-            attention_mask = attention_mask.repeat_interleave(self.config.n, dim=0)
-            position_ids = position_ids.repeat_interleave(self.config.n, dim=0)
-            batch_size = batch_size * self.config.n
+            target_batch_size = original_batch_size * self.config.n
+        
+        print(f"Target batch size: {target_batch_size}, Current response shape: {response.shape}")
+        
+        # Adjust the response batch size to match the target
+        if response.size(0) > target_batch_size:
+            # Truncate if we have too many samples
+            print(f"Truncating response from {response.size(0)} to {target_batch_size} samples")
+            response = response[:target_batch_size]
+            log_probs = log_probs[:target_batch_size]
+        elif response.size(0) < target_batch_size:
+            # Repeat if we have too few samples
+            print(f"Expanding response from {response.size(0)} to {target_batch_size} samples")
+            repeat_factor = (target_batch_size + response.size(0) - 1) // response.size(0)  # Ceiling division
+            response = response.repeat_interleave(repeat_factor, dim=0)[:target_batch_size]
+            log_probs = log_probs.repeat_interleave(repeat_factor, dim=0)[:target_batch_size]
+        
+        # Now adjust idx, attention_mask and position_ids to match
+        if idx.size(0) != target_batch_size:
+            if idx.size(0) < target_batch_size:
+                # Repeat idx to match target batch size
+                repeat_factor = (target_batch_size + idx.size(0) - 1) // idx.size(0)  # Ceiling division
+                idx = idx.repeat_interleave(repeat_factor, dim=0)[:target_batch_size]
+                attention_mask = attention_mask.repeat_interleave(repeat_factor, dim=0)[:target_batch_size]
+                position_ids = position_ids.repeat_interleave(repeat_factor, dim=0)[:target_batch_size]
+            else:
+                # Truncate idx to match target batch size
+                idx = idx[:target_batch_size]
+                attention_mask = attention_mask[:target_batch_size]
+                position_ids = position_ids[:target_batch_size]
+        
+        batch_size = target_batch_size  # Update batch size after adjustments
+        
+        print(f"Final sizes - idx: {idx.shape}, response: {response.shape}, batch_size: {batch_size}")
+        
+        # Sanity check the batch sizes
+        assert idx.size(0) == target_batch_size, f"idx size {idx.size(0)} doesn't match target {target_batch_size}"
+        assert response.size(0) == target_batch_size, f"response size {response.size(0)} doesn't match target {target_batch_size}"
+        
+        # Clear any unused memory before concatenation
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            
         seq = torch.cat([idx, response], dim=-1)
 
         response_length = response.size(1)
@@ -284,7 +640,7 @@ class SGLangRollout(BaseRollout):
         )
 
         # free cache engine
-        if self.config.free_cache_engine and self.inference_engine._engine is not None:
+        if self.config.free_cache_engine and not self.use_http_server and self.inference_engine._engine is not None:
             self.inference_engine._engine.tokenizer_manager.flush_cache()
 
         return DataProto(batch=batch)

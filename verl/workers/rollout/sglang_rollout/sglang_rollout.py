@@ -101,6 +101,80 @@ def find_available_port(base_port: int):
                 port = base_port
 
 
+class SGLangHttpServer:
+    def __init__(self, host, port, worker_rank, config, device_mesh_cpu, actor_module):
+        self.host = host
+        self.port = self._initialize_port(port, worker_rank)
+        self.url = f"http://{self.host}:{self.port}/generate"
+        self.engine = self._initialize_engine(config, device_mesh_cpu, actor_module, worker_rank)
+        
+    def _initialize_port(self, port, worker_rank):
+        if port is None:
+            return find_available_port(32000 + worker_rank * 100)
+        return port + worker_rank
+        
+    def _initialize_engine(self, config, device_mesh_cpu, actor_module, worker_rank):
+        # worker_rank is now the tp_rank within the group
+        if torch.cuda.is_available():
+            torch.cuda.set_device(worker_rank)
+        
+        # VerlEngine will only start the server on tp_rank 0 
+        return VerlEngine(
+            model_path=actor_module,
+            dtype=config.dtype,
+            mem_fraction_static=config.gpu_memory_utilization,
+            device_mesh_cpu=device_mesh_cpu["tp"],
+            base_gpu_id=0,  # base_gpu_id should be 0 as we set the device above
+            gpu_id_step=1,
+            log_level="INFO",
+            log_requests=True,
+            log_requests_level=2,
+            max_running_requests=1,
+            launch_server=True,  # This flag tells VerlEngine to conditionally launch server only on tp_rank 0
+            server_args=ServerArgs(
+                model_path=actor_module,
+                tp_size=config.get("tensor_model_parallel_size", 1),
+                port=self.port,
+                mem_fraction_static=config.gpu_memory_utilization,
+            ),
+        )
+    
+    def check_health(self, max_retries=5):
+        """Check if server is healthy and responding"""
+        for retry in range(max_retries):
+            try:
+                health_url = f"http://{self.host}:{self.port}/health_generate"
+                response = requests.get(health_url, timeout=5)
+                if response.status_code == 200:
+                    print(f"Successfully connected to SGLang server")
+                    return True
+            except Exception as e:
+                print(f"Server health check failed (attempt {retry+1}/{max_retries}): {e}")
+                time.sleep(1)
+        return False
+
+    def generate(self, prompt_tokens, sampling_params, tokenizer):
+        """Handle generation request to server with fallback"""
+        try:
+            decoded_text = tokenizer.decode(prompt_tokens)
+            request_data = {
+                "text": decoded_text,
+                "max_tokens": min(sampling_params.get("max_new_tokens", 1024), sampling_params.get("response_length", 1024)),
+                "temperature": sampling_params.get("temperature", 1.0),
+                "top_p": sampling_params.get("top_p", 1.0),
+                "top_k": sampling_params.get("top_k", -1),
+                "n": sampling_params.get("n", 1)
+            }
+            
+            response = requests.post(self.url, json=request_data, timeout=120)
+            response.raise_for_status()
+            return response.json()
+            
+        except Exception as e:
+            print(f"Error in HTTP request: {e}")
+            return None
+
+
 class SGLangRollout(BaseRollout):
 
     def __init__(
@@ -153,110 +227,66 @@ class SGLangRollout(BaseRollout):
             mesh_dim_names=["dp", "tp", "pp"],
         )
         device_mesh_cpu = init_device_mesh("cpu", **device_mesh_kwargs)
+        # Save device_mesh_cpu for later use
+        self.device_mesh_cpu = device_mesh_cpu
         # device_mesh_device = init_device_mesh("cuda", **device_mesh_kwargs)
 
         # get tp_rank of this process in this tp group
         visible_devices = [None] * device_mesh_cpu.size(1)
         torch.distributed.all_gather_object(visible_devices, os.environ["CUDA_VISIBLE_DEVICES"],
-                                            device_mesh_cpu.get_group("tp"))
+                                          device_mesh_cpu.get_group("tp"))
         os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(visible_devices)
 
-        # Check if HTTP server mode is enabled
-        self.use_http_server = config.get("use_http_server", False)
-        self.server_port = config.get("server_port", None)
-        self.server_host = config.get("server_host", "localhost")
-        print(f"self.use_http_server: {self.use_http_server}")
-        print(f"self.server_port: {self.server_port}")
-        print(f"self.server_host: {self.server_host}")
+        # Initialize HTTP server if enabled
+        self.http_server = None
+        self.inference_engine = None  # Initialize to None first
         
-        # Initialize based on mode (in-process or HTTP server)
-        if self.use_http_server:
+        # Get the worker rank for proper device assignment
+        worker_rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+        
+        # Calculate proper TP rank for this worker based on the device mesh
+        tp_size = config.get("tensor_model_parallel_size", 1)
+        tp_group_rank = worker_rank % tp_size
+        
+        # Set CUDA device based on TP rank
+        if torch.cuda.is_available():
+            torch.cuda.set_device(tp_group_rank)
+        
+        if config.get("use_http_server", False):
             try:
-                # Get worker rank for unique port assignment
-                worker_rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+                server_port = config.get("server_port", None)
+                if server_port is not None:
+                    # Make server port unique per DP group
+                    dp_group_id = worker_rank // tp_size
+                    server_port = server_port + dp_group_id
                 
-                # If server_port is None, find an available port
-                if self.server_port is None:
-                    self.server_port = find_available_port(32000 + worker_rank * 100)
-                else:
-                    # Add worker rank offset to ensure unique ports across workers
-                    self.server_port = self.server_port + worker_rank
-                
-                # Initialize the engine with HTTP server
-                print(f"Worker {worker_rank}: Attempting to start SGLang HTTP server on port {self.server_port}")
-                self.inference_engine = VerlEngine(
-                    model_path=actor_module,
-                    dtype=config.dtype,
-                    mem_fraction_static=config.gpu_memory_utilization,
-                    device_mesh_cpu=device_mesh_cpu["tp"],
-                    base_gpu_id=0,
-                    gpu_id_step=1,
-                    log_level="INFO",
-                    log_requests=True,
-                    log_requests_level=2,
-                    max_running_requests=1,
-                    launch_server=True,  # Enable HTTP server
-                    server_args=ServerArgs(
-                        model_path=actor_module,
-                        tp_size=tp_size,
-                        port=self.server_port,
-                        mem_fraction_static=config.gpu_memory_utilization,
-                    ),
+                self.http_server = SGLangHttpServer(
+                    host=config.get("server_host", "localhost"),
+                    port=server_port,
+                    worker_rank=tp_group_rank,
+                    config=config,
+                    device_mesh_cpu=device_mesh_cpu,
+                    actor_module=actor_module
                 )
-                self.server_url = f"http://{self.server_host}:{self.server_port}/generate"
-                print(f"Worker {worker_rank}: SGLang HTTP server started at {self.server_url}")
                 
-                # IMPORTANT: Check if server is responding
-                max_retries = 5
-                for retry in range(max_retries):
-                    try:
-                        health_url = f"http://{self.server_host}:{self.server_port}/health_generate"
-                        response = requests.get(health_url, timeout=5)
-                        if response.status_code == 200:
-                            print(f"Worker {worker_rank}: Successfully connected to SGLang server")
-                            break
-                    except Exception as e:
-                        print(f"Worker {worker_rank}: Server health check failed (attempt {retry+1}/{max_retries}): {e}")
-                        time.sleep(1)
+                if not self.http_server.check_health():
+                    raise Exception("Failed to initialize HTTP server")
                     
-                    if retry == max_retries - 1:
-                        raise Exception(f"Failed to connect to SGLang server after {max_retries} attempts")
-                
+                # Store a reference to the engine created by the HTTP server
+                self.inference_engine = self.http_server.engine
+                    
             except Exception as e:
                 print(f"Failed to start SGLang HTTP server: {e}")
                 print("Falling back to in-process engine")
-                self.use_http_server = False
-                # Fall back to in-process engine
-                self.inference_engine = VerlEngine(
-                    model_path=actor_module,
-                    dtype=config.dtype,
-                    mem_fraction_static=config.gpu_memory_utilization,
-                    device_mesh_cpu=device_mesh_cpu["tp"],
-                    base_gpu_id=0,
-                    gpu_id_step=1,
-                    log_level="INFO",
-                    log_requests=True,
-                    log_requests_level=2,
-                    max_running_requests=1,
-                )
-        else:
-            # Original in-process engine initialization
-            self.inference_engine = VerlEngine(
-                model_path=actor_module,
-                dtype=config.dtype,
-                mem_fraction_static=config.gpu_memory_utilization,
-                device_mesh_cpu=device_mesh_cpu["tp"],
-                base_gpu_id=0,
-                gpu_id_step=1,
-                log_level="INFO",
-                log_requests=True,
-                log_requests_level=2,
-                max_running_requests=1,
+                self.http_server = None
+        
+        # Initialize in-process engine if HTTP server is not used or failed
+        if self.http_server is None:
+            self.inference_engine = self._initialize_in_process_engine(
+                actor_module, config, device_mesh_cpu, worker_rank=tp_group_rank
             )
-
-        # offload (skip for HTTP server mode as it causes CUDA errors)
-        if not self.use_http_server:
-            self.inference_engine.release_memory_occupation()
+            if not config.get("use_http_server", False):
+                self.inference_engine.release_memory_occupation()
 
         kwargs = dict(n=1,
                       max_new_tokens=config.response_length,
@@ -272,6 +302,24 @@ class SGLangRollout(BaseRollout):
 
         self.tokenizer = tokenizer
         self.pad_token_id = tokenizer.pad_token_id
+
+    def _initialize_in_process_engine(self, actor_module, config, device_mesh_cpu, worker_rank=None):
+        # Set CUDA device if worker_rank is provided
+        if worker_rank is not None and torch.cuda.is_available():
+            torch.cuda.set_device(worker_rank)
+            
+        return VerlEngine(
+            model_path=actor_module,
+            dtype=config.dtype,
+            mem_fraction_static=config.gpu_memory_utilization,
+            device_mesh_cpu=device_mesh_cpu["tp"],
+            base_gpu_id=0,  # base_gpu_id should be 0 as we set the device above
+            gpu_id_step=1,
+            log_level="INFO",
+            log_requests=True,
+            log_requests_level=2,
+            max_running_requests=1,
+        )
 
     @contextmanager
     def update_sampling_params(self, **kwargs):
@@ -448,99 +496,60 @@ class SGLangRollout(BaseRollout):
                 print(f"Limiting max_new_tokens from {self.sampling_params['max_new_tokens']} to {max_new_tokens}")
                 self.sampling_params["max_new_tokens"] = max_new_tokens
             
-            if self.use_http_server:
-                # Use HTTP server for generation
+            if self.http_server:
                 all_outputs = []
+                max_batch_size = max(1, 8 // n_samples)
                 
-                # First check if server is still responsive
-                try:
-                    # Try checking the server with a simple request to /generate
-                    health_url = f"http://{self.server_host}:{self.server_port}/generate"
-                    health_data = {"text": "test", "max_tokens": 1}
-                    health_response = requests.post(health_url, json=health_data, timeout=5)
-                    if health_response.status_code != 200:
-                        print(f"Server health check failed: {health_response.status_code}")
-                        raise Exception(f"Server returned status code {health_response.status_code}")
-                    print(f"Server health check OK")
-                except Exception as e:
-                    print(f"Server health check failed, falling back to in-process mode: {e}")
-                    self.use_http_server = False
-                    # Fall back to in-process generation
-                    output = self.inference_engine.generate(
-                        prompt=None,
-                        sampling_params=self.sampling_params,
-                        return_logprob=True,
-                        input_ids=idx_list,
-                    )
-                    out = _post_process_outputs(self.tokenizer, output)
-                else:
-                    # Process in smaller batches to avoid OOM
-                    max_batch_size = 8 // n_samples  # Adjust based on number of samples
-                    max_batch_size = max(1, max_batch_size)  # At least 1
+                for batch_start in range(0, len(idx_list), max_batch_size):
+                    batch_end = min(batch_start + max_batch_size, len(idx_list))
+                    batch_idx_list = idx_list[batch_start:batch_end]
                     
-                    for batch_start in range(0, len(idx_list), max_batch_size):
-                        batch_end = min(batch_start + max_batch_size, len(idx_list))
-                        batch_idx_list = idx_list[batch_start:batch_end]
-                        print(f"Processing HTTP batch {batch_start}:{batch_end} of {len(idx_list)}")
-                        
-                        batch_outputs = []
-                        for prompt_tokens in batch_idx_list:
-                            # Format request for HTTP server
+                    for prompt_tokens in batch_idx_list:
+                        output = self.http_server.generate(
+                            prompt_tokens, 
+                            self.sampling_params,
+                            self.tokenizer
+                        )
+                        if output is None:
+                            # Fallback to in-process generation using a temporary engine
+                            # Don't use self.inference_engine directly as it's the server's engine
+                            worker_rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+                            tp_size = self.config.get("tensor_model_parallel_size", 1)
+                            tp_group_rank = worker_rank % tp_size
+                            
+                            # Set CUDA device for this fallback operation
+                            if torch.cuda.is_available():
+                                torch.cuda.set_device(tp_group_rank)
+                                
+                            temp_engine = self._initialize_in_process_engine(
+                                actor_module=self.config.model.path,
+                                config=self.config,
+                                device_mesh_cpu=self.device_mesh_cpu,
+                                worker_rank=tp_group_rank
+                            )
                             try:
-                                # Convert token IDs back to text if possible
-                                decoded_text = self.tokenizer.decode(prompt_tokens)
-                                # Use the server's expected format
-                                request_data = {
-                                    "text": decoded_text,
-                                    "max_tokens": min(self.sampling_params.get("max_new_tokens", 1024), self.config.response_length),
-                                    "temperature": self.sampling_params.get("temperature", 1.0),
-                                    "top_p": self.sampling_params.get("top_p", 1.0),
-                                    "top_k": self.sampling_params.get("top_k", -1),
-                                    "n": n_samples  # Important: use the same n as the sampling params
-                                }
-                                
-                                # Send request to server
-                                print(f"Sending request to {self.server_url}")
-                                response = requests.post(self.server_url, json=request_data, timeout=120)  # Longer timeout
-                                response.raise_for_status()  # Raise exception for HTTP errors
-                                response_data = response.json()
-                                
-                                # Process server response
-                                print(f"Received response from server")
-                                batch_outputs.append(response_data)
-                            except Exception as e:
-                                print(f"Error in HTTP request: {e}")
-                                # Fall back to in-process generation for this sample
-                                print("Falling back to in-process generation for this prompt")
-                                in_process_output = self.inference_engine.generate(
+                                output = temp_engine.generate(
                                     prompt=None,
                                     sampling_params=self.sampling_params,
                                     return_logprob=True,
                                     input_ids=[prompt_tokens],
-                                )
-                                # Add this output to our batch
-                                batch_outputs.append(in_process_output[0])
-                        
-                        all_outputs.extend(batch_outputs)
-                        
-                        # Free up memory after each batch
-                        if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
+                                )[0]
+                            finally:
+                                # Clean up the temporary engine
+                                del temp_engine
+                                if torch.cuda.is_available():
+                                    torch.cuda.empty_cache()
+                        all_outputs.append(output)
                     
-                    # Only process server outputs if we didn't fall back to in-process mode
-                    if self.use_http_server:
-                        # Post-process outputs from HTTP server
-                        print(f"Processing server responses")
-                        out = self._post_process_server_outputs(
-                            self.tokenizer, 
-                            all_outputs, 
-                            batch_size=batch_size,
-                            n=n_samples
-                        )
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                
+                out = self._post_process_server_outputs(
+                    self.tokenizer, all_outputs, batch_size=batch_size, n=n_samples
+                )
             else:
-                # Use in-process engine for generation
                 output = self.inference_engine.generate(
-                    prompt=None,  # because we have already convert it to prompt token id
+                    prompt=None,
                     sampling_params=self.sampling_params,
                     return_logprob=True,
                     input_ids=idx_list,
@@ -640,7 +649,7 @@ class SGLangRollout(BaseRollout):
         )
 
         # free cache engine
-        if self.config.free_cache_engine and not self.use_http_server and self.inference_engine._engine is not None:
+        if self.config.free_cache_engine and not self.http_server and self.inference_engine._engine is not None:
             self.inference_engine._engine.tokenizer_manager.flush_cache()
 
         return DataProto(batch=batch)

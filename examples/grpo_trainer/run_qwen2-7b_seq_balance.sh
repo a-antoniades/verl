@@ -5,7 +5,7 @@ export VERL_LOG_LEVEL=INFO  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
 
 export VLLM_ATTENTION_BACKEND=XFORMERS
 # Automatically detect number of available GPUs using nvidia-smi
-export N_GPUS=2
+export N_GPUS=4
 export BASE_MODEL="/share/edc/home/antonis/weights/huggingface/models--Qwen--Qwen2.5-0.5B"
 export DATA_DIR="/share/edc/home/antonis/swe-gym-setup/verl/data/gsm8k"
 export ROLLOUT_TP_SIZE=1
@@ -29,9 +29,6 @@ export WANDB_MODE=disabled
 
 # HTTP server configuration
 # Set to "true" to enable HTTP server mode
-export USE_HTTP_SERVER="true"
-# Optional: specify a port (if not set, an available port will be found automatically)
-export SERVER_PORT=32168
 
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
@@ -55,10 +52,9 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
     actor_rollout_ref.rollout.tensor_model_parallel_size=$ROLLOUT_TP_SIZE \
     actor_rollout_ref.rollout.name="sglang" \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.7 \
     actor_rollout_ref.rollout.n=3 \
-    +actor_rollout_ref.rollout.use_http_server=$USE_HTTP_SERVER \
-    +actor_rollout_ref.rollout.server_port=$SERVER_PORT \
+    +actor_rollout_ref.rollout.use_http_server="true" \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     algorithm.kl_ctrl.kl_coef=0.001 \
     trainer.critic_warmup=0 \
@@ -71,7 +67,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.save_freq=-1 \
     trainer.test_freq=5 \
     trainer.total_epochs=1000 \
-    actor_rollout_ref.model.enable_gradient_checkpointing=True
+    actor_rollout_ref.model.enable_gradient_checkpointing=True \
     +actor_rollout_ref.actor.use_length_penalty=false \
     +actor_rollout_ref.actor.length_window_size=250 \
     +actor_rollout_ref.actor.length_penalty_coef=0.1 \

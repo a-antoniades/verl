@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Create and activate conda environment with Python 3.11
-conda create -n verl python=3.12 -y
+conda create -n verl_sglang python=3.12 -y
 conda activate verl
 
 # Install flash-attention

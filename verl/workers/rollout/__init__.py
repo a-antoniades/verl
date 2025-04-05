@@ -35,6 +35,9 @@ def _get_rollout_map():
         "naive": {"cls": "verl.workers.rollout.naive.NaiveRollout"},
         "hf": {"cls": "verl.workers.rollout.hf_rollout.hf_rollout.HFRollout"},
         "moatless_vllm": {"cls": "verl.workers.rollout.moatless_vllm_rollout.MoatlessVLLMRollout"},
+        # SGLang rollouts
+        "sglang": {"cls": "verl.workers.rollout.sglang_rollout.sglang_rollout.SGLangRollout"},
+        "sglang_api": {"cls": "verl.workers.rollout.sglang_rollout.sglang_rollout_api.SGLangRolloutAPI"},
         # Add vLLM if it's available
         "vllm": {"cls": "verl.workers.rollout.vllm_rollout.vllm_rollout.vLLMRollout"},
     }

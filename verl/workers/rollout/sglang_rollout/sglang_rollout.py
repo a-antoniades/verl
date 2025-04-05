@@ -561,6 +561,7 @@ class SGLangRollout(BaseRollout):
 
         print(f"Response tensor shape: {response.shape}")
         print(f"IDX tensor shape: {idx.shape}")
+        print(f"log_probs tensor shape: {log_probs.shape}")
 
         # Ensure we don't exceed the configured response length
         if response.shape[1] > self.config.response_length:

@@ -5,7 +5,7 @@ export VERL_LOG_LEVEL=INFO  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
 
 export VLLM_ATTENTION_BACKEND=XFORMERS
 # Automatically detect number of available GPUs using nvidia-smi
-export N_GPUS=4
+export N_GPUS=2
 export BASE_MODEL="/share/edc/home/antonis/weights/huggingface/models--Qwen--Qwen2.5-0.5B"
 export DATA_DIR="/share/edc/home/antonis/swe-gym-setup/verl/data/gsm8k"
 export ROLLOUT_TP_SIZE=1

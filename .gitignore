@@ -133,3 +133,4 @@ data
 logs
 log
 outputs
+**/evaluations
